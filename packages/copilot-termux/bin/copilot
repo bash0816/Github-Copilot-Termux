@@ -7,7 +7,8 @@ while [ -L "${SELF}" ]; do
   case "${SELF}" in /*) ;; *) SELF="${DIR}/${SELF}" ;; esac
 done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
-exec "$PACKAGE_DIR/lib/node" \
+NODE="${MAGI_NODE:-$PACKAGE_DIR/lib/node}"
+exec "$NODE" \
   --require "$PACKAGE_DIR/lib/platform-patch.js" \
   "$PACKAGE_DIR/lib/copilot/index.js" \
   "$@"
