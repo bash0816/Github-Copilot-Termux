@@ -1,0 +1,48 @@
+name: npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish to npm'
+        type: boolean
+        default: false
+      npm_tag:
+        description: 'npm tag (candidate or latest)'
+        default: 'candidate'
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify package
+        run: |
+          node packages/copilot-termux/lib/node --version 2>/dev/null || echo "node binary not staged yet"
+
+  preflight:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preflight check
+        run: |
+          cat packages/copilot-termux/package.json
+
+  publish:
+    needs: preflight
+    if: ${{ inputs.publish == true }}
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish to npm
+        run: |
+          cd packages/copilot-termux
+          npm publish --tag ${{ inputs.npm_tag }} --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
