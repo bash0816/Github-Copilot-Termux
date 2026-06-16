@@ -24,8 +24,8 @@ jobs:
             libssl-dev zlib1g-dev libicu-dev \
             pkg-config cmake ccache
 
-      - name: Cache ccache
-        uses: actions/cache@v4
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
           key: ccache-nodejs-${{ inputs.node_version }}-arm64-v1
@@ -37,7 +37,7 @@ jobs:
           VERSION="${{ inputs.node_version }}"
           curl -fsSL "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz" -o node.tar.xz
           tar -xf node.tar.xz
-          mv "node-v${VERSION}" node-src
+          mv "node-v${VErSION}" node-src
 
       - name: Configure Node.js
         run: |
@@ -53,8 +53,10 @@ jobs:
 
       - name: Install Node.js
         run: |
+          sudo mkdir -p /opt/node-glibc
+          sudo chown "$USER" /opt/node-glibc
           cd node-src
-          sudo make install
+          make install -j$(nproc) CC="ccache gcc" CXX="ccache g++"
           /opt/node-glibc/bin/node --version
 
       - name: Verify binary
@@ -111,7 +113,7 @@ jobs:
             } catch (e) {
               if (!e.message.includes('already_exists')) throw e;
             }
-            const archive = `node-glibc-v${version}-linux-arm64.tar.gz`;
+            const archive = `node-glibc-v${version}-linux-arm64.tar.gza;
             const sha256 = `node-glibc-v${version}-linux-arm64.tar.gz.sha256`;
             for (const file of [archive, sha256]) {
               await github.rest.repos.uploadReleaseAsset({
@@ -126,3 +128,10 @@ jobs:
                 data: fs.readFileSync(file),
               });
             }
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ccache-nodejs-${{ inputs.node_version }}-arm64-v1
