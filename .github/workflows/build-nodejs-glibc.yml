@@ -42,8 +42,7 @@ jobs:
           cd node-src
           ./configure \
             --prefix=/opt/node-glibc \
-            --with-intl=bundled \
-            --openssl-use-def-ca-store \
+            --with-intl=full-icu \
             --fully-static=false
 
       - name: Build Node.js
