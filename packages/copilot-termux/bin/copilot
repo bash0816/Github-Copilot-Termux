@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+SELF="$0"
+while [ -L "${SELF}" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")" && pwd)
+  SELF="$(readlink "${SELF}")"
+  case "${SELF}" in /*) ;; *) SELF="${DIR}/${SELF}" ;; esac
+done
+PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
+exec "$PACKAGE_DIR/lib/node" \
+  --require "$PACKAGE_DIR/lib/platform-patch.js" \
+  "$PACKAGE_DIR/lib/copilot/index.js" \
+  "$@"
