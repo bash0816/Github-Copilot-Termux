@@ -43,7 +43,6 @@ jobs:
           ./configure \
             --prefix=/opt/node-glibc \
             --with-intl=full-icu \
-            --fully-static=false
 
       - name: Build Node.js
         run: |
