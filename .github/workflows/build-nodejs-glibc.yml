@@ -1,0 +1,129 @@
+name: Build Node.js (glibc, aarch64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      node_version:
+        description: 'Node.js version (e.g. 24.15.0)'
+        required: true
+        default: '24.15.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential python3 git curl \
+            libssl-dev zlib1g-dev libicu-dev \
+            pkg-config cmake
+
+      - name: Cache Node.js build
+        uses: actions/cache@v4
+        with:
+          path: ~/.node-build-cache
+          key: nodejs-${{ inputs.node_version }}-arm64-glibc-v1
+
+      - name: Download Node.js source
+        run: |
+          VERSION="${{ inputs.node_version }}"
+          curl -fsSL "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz" -o node.tar.xz
+          tar -xf node.tar.xz
+          mv "node-v${VERSION}" node-src
+
+      - name: Configure Node.js
+        run: |
+          cd node-src
+          ./configure \
+            --prefix=/opt/node-glibc \
+            --with-intl=bundled \
+            --openssl-use-def-ca-store \
+            --fully-static=false
+
+      - name: Build Node.js
+        run: |
+          cd node-src
+          make -j$(nproc)
+
+      - name: Install Node.js
+        run: |
+          cd node-src
+          sudo make install
+          /opt/node-glibc/bin/node --version
+
+      - name: Verify binary
+        run: |
+          file /opt/node-glibc/bin/node
+          ldd /opt/node-glibc/bin/node
+          /opt/node-glibc/bin/node -e "console.log('platform:', process.platform)"
+
+      - name: Collect glibc dependencies
+        run: |
+          mkdir -p glibc-deps
+          ldd /opt/node-glibc/bin/node | awk '{print $3}' | grep '/' | while read lib; do
+            [ -f "$lib" ] && cp "$lib" glibc-deps/ && echo "copied: $lib"
+          done
+          ls -lh glibc-deps/
+          cp /lib/ld-linux-aarch64.so.1 glibc-deps/ 2>/dev/null || \
+          cp /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 glibc-deps/ 2>/dev/null || true
+
+      - name: Create release archive
+        run: |
+          VERSION="${{ inputs.node_version }}"
+          mkdir -p release-artifact
+          cp /opt/node-glibc/bin/node release-artifact/
+          cp -r glibc-deps release-artifact/
+          tar -czf "node-glibc-v${VERSION}-linux-arm64.tar.gz" -C release-artifact .
+          sha256sum "node-glibc-v${VERSION}-linux-arm64.tar.gz" > "node-glibc-v${VERSION}-linux-arm64.tar.gz.sha256"
+          echo "Archive created:"
+          ls -lh "node-glibc-v${VERSION}-linux-arm64.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-glibc-v${{ inputs.node_version }}-linux-arm64
+          path: |
+            node-glibc-v${{ inputs.node_version }}-linux-arm64.tar.gz
+            node-glibc-v${{ inputs.node_version }}-linux-arm64.tar.gz.sha256
+          retention-days: 30
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = '${{ inputs.node_version }}';
+            const tag = `node-glibc-v${version}`;
+            const fs = require('fs');
+            try {
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tag,
+                name: `Node.js ${version} (glibc, aarch64)`,
+                body: `glibc-linked Node.js ${version} for Android/Termux aarch64.\n\nBuilt on ubuntu-24.04-arm.`,
+                prerelease: true,
+              });
+            } catch (e) {
+              if (!e.message.includes('already_exists')) throw e;
+            }
+            const archive = `node-glibc-v${version}-linux-arm64.tar.gz`;
+            const sha256 = `node-glibc-v${version}-linux-arm64.tar.gz.sha256`;
+            for (const file of [archive, sha256]) {
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: (await github.rest.repos.getReleaseByTag({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  tag: tag,
+                })).data.id,
+                name: file,
+                data: fs.readFileSync(file),
+              });
+            }
