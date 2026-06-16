@@ -37,7 +37,7 @@ jobs:
           VERSION="${{ inputs.node_version }}"
           curl -fsSL "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz" -o node.tar.xz
           tar -xf node.tar.xz
-          mv "node-v${VErSION}" node-src
+          mv "node-v${VERSION}" node-src
 
       - name: Configure Node.js
         run: |
@@ -113,7 +113,7 @@ jobs:
             } catch (e) {
               if (!e.message.includes('already_exists')) throw e;
             }
-            const archive = `node-glibc-v${version}-linux-arm64.tar.gza;
+            const archive = `node-glibc-v${version}-linux-arm64.tar.gz`;
             const sha256 = `node-glibc-v${version}-linux-arm64.tar.gz.sha256`;
             for (const file of [archive, sha256]) {
               await github.rest.repos.uploadReleaseAsset({
