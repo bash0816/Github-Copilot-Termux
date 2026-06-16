@@ -22,13 +22,15 @@ jobs:
           sudo apt-get install -y -qq \
             build-essential python3 git curl \
             libssl-dev zlib1g-dev libicu-dev \
-            pkg-config cmake
+            pkg-config cmake ccache
 
-      - name: Cache Node.js build
+      - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: ~/.node-build-cache
-          key: nodejs-${{ inputs.node_version }}-arm64-glibc-v1
+          path: ~/.ccache
+          key: ccache-nodejs-${{ inputs.node_version }}-arm64-v1
+          restore-keys: |
+            ccache-nodejs-${{ inputs.node_version }}-arm64-
 
       - name: Download Node.js source
         run: |
@@ -42,12 +44,12 @@ jobs:
           cd node-src
           ./configure \
             --prefix=/opt/node-glibc \
-            --with-intl=full-icu \
+            --with-intl=full-icu
 
       - name: Build Node.js
         run: |
           cd node-src
-          make -j$(nproc)
+          CC="ccache gcc" CXX="ccache g++" make -j$(nproc)
 
       - name: Install Node.js
         run: |
@@ -68,8 +70,7 @@ jobs:
             [ -f "$lib" ] && cp "$lib" glibc-deps/ && echo "copied: $lib"
           done
           ls -lh glibc-deps/
-          cp /lib/ld-linux-aarch64.so.1 glibc-deps/ 2>/dev/null || \
-          cp /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 glibc-deps/ 2>/dev/null || true
+          find /lib /lib64 /usr/lib -name "ld-linux-aarch64.so.1" | head -1 | xargs -I{} cp {} glibc-deps/ 2>/dev/null || true
 
       - name: Create release archive
         run: |
