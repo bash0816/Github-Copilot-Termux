@@ -1,0 +1,27 @@
+name: Copilot version watch
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check latest @github/copilot version
+        run: |
+          LATEST=$(npm view @github/copilot version)
+          CURRENT=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.copilot_version || 'none')")
+          echo "Latest: $LATEST"
+          echo "Current: $CURRENT"
+          if [ "$LATEST" != "$CURRENT" ]; then
+            echo "NEW VERSION DETECTED: $LATEST"
+            echo "new_version=$LATEST" >> $GITHUB_OUTPUT
+          else
+            echo "No new version"
+          fi
