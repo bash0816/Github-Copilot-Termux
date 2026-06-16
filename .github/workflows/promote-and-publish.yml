@@ -1,0 +1,28 @@
+name: Promote and publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote to latest'
+        required: true
+      npm_tag:
+        description: 'npm tag'
+        default: 'latest'
+
+jobs:
+  promote-and-publish:
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Promote to latest
+        run: |
+          npm dist-tag add @bash0816/copilot-termux@${{ inputs.version }} ${{ inputs.npm_tag }}
+          npm dist-tag add @bash0816/copilot-termux@${{ inputs.version }} previous_stable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
