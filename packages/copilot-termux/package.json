@@ -1,0 +1,17 @@
+{
+  "name": "@bash0816/copilot-termux",
+  "version": "0.0.1",
+  "description": "GitHub Copilot CLI for Termux (Android aarch64)",
+  "license": "Apache-2.0",
+  "bin": {
+    "copilot": "bin/copilot"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["android", "linux"],
+  "cpu": ["arm64"]
+}
