@@ -1,0 +1,32 @@
+name: Release finalize
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Released version'
+        required: true
+      release_notes:
+        description: 'Release notes (optional)'
+        default: ''
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        run: |
+          VERSION="${{ inputs.version }}"
+          NOTES="${{ inputs.release_notes }}"
+          [ -z "$NOTES" ] && NOTES="upstream @github/copilot@${VERSION} 追従。"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "$NOTES" \
+            --latest 2>/dev/null || echo "Release already exists, skipping"
+        env:
+          GH_TOKEN: ${{ github.token }}
