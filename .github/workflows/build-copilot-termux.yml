@@ -1,0 +1,95 @@
+name: Build copilot-termux package
+
+on:
+  workflow_dispatch:
+    inputs:
+      copilot_version:
+        description: '@github/copilot version'
+        required: true
+        default: '1.0.63'
+      node_glibc_tag:
+        description: 'node-glibc release tag (e.g. node-glibc-v24.15.0)'
+        required: true
+        default: 'node-glibc-v24.15.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install patchelf
+        run: sudo apt-get install -y patchelf
+
+      - name: Download glibc Node.js artifact
+        run: |
+          TAG="${{ inputs.node_glibc_tag }}"
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            --pattern "*.tar.gz" \
+            --dir ./node-artifact/
+          tar -xzf node-artifact/*.tar.gz -C node-artifact/
+          ls -la node-artifact/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Stage @github/copilot (unmodified)
+        run: |
+          VERSION="${{ inputs.copilot_version }}"
+          mkdir -p packages/copilot-termux/lib/copilot
+          npm pack "@github/copilot@$VERSION" --pack-destination /tmp/
+          tar -xzf "/tmp/github-copilot-${VERSION}.tgz" -C /tmp/
+          cp -r /tmp/package/. packages/copilot-termux/lib/copilot/
+          echo "Staged @github/copilot@$VERSION (unmodified)"
+
+      - name: Stage glibc Node.js binary
+        run: |
+          cp node-artifact/node packages/copilot-termux/lib/node
+          chmod +x packages/copilot-termux/lib/node
+          packages/copilot-termux/lib/node --version
+
+      - name: Stage glibc .so files
+        run: |
+          mkdir -p packages/copilot-termux/lib/glibc
+          cp node-artifact/glibc-deps/* packages/copilot-termux/lib/glibc/ 2>/dev/null || \
+          cp node-artifact/*.so* packages/copilot-termux/lib/glibc/ 2>/dev/null || true
+          ls -lh packages/copilot-termux/lib/glibc/
+
+      - name: Patch .node RPATH
+        run: |
+          PREBUILD="packages/copilot-termux/lib/copilot/prebuilds/linux-arm64"
+          GLIBC_ABS="$(realpath packages/copilot-termux/lib/glibc)"
+          for f in "$PREBUILD"/*.node; do
+            patchelf --set-rpath "$GLIBC_ABS" "$f" 2>/dev/null && echo "patched: $(basename $f)" || true
+          done
+
+      - name: Verify
+        run: |
+          GLIBC="$(realpath packages/copilot-termux/lib/glibc)"
+          LD_LIBRARY_PATH="$GLIBC" \
+            packages/copilot-termux/lib/node \
+            --require packages/copilot-termux/lib/platform-patch.js \
+            packages/copilot-termux/lib/copilot/index.js --version
+
+      - name: Create artifact
+        run: |
+          VERSION="${{ inputs.copilot_version }}"
+          tar -czf "copilot-termux-${VERSION}-linux-arm64.tar.gz" \
+            packages/copilot-termux/lib/
+          sha256sum "copilot-termux-${VERSION}-linux-arm64.tar.gz" \
+            > "copilot-termux-${VERSION}-linux-arm64.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-termux-${{ inputs.copilot_version }}-linux-arm64
+          path: |
+            copilot-termux-${{ inputs.copilot_version }}-linux-arm64.tar.gz
+            copilot-termux-${{ inputs.copilot_version }}-linux-arm64.tar.gz.sha256
+          retention-days: 30
