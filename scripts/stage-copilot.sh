@@ -95,10 +95,8 @@ if command -v readelf >/dev/null 2>&1; then
     fi
   done
 else
-  echo "WARN: readelf not found, copying fallback lib set"
-  for lib in libc.so.6 libm.so.6 libstdc++.so.6 libgcc_s.so.1 libdl.so.2 libpthread.so.0; do
-    [[ -f "$GLIBC_DIR/$lib" ]] && cp "$GLIBC_DIR/$lib" "$LIB_DIR/glibc/" && echo "  glibc [fallback]: $lib"
-  done
+  echo "Error: readelf is required but not found. Install binutils." >&2
+  exit 1
 fi
 
 echo "Stage complete: $LIB_DIR"

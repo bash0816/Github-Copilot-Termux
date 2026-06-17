@@ -9,7 +9,7 @@ done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
 
 if [ -n "${MAGI_NODE:-}" ]; then
-  _NODE_MAJOR=$("${MAGI_NODE}" -e "process.stdout.write(process.versions.node.split('.')[0])" 2>/dev/null) || {
+  _NODE_MAJOR=$(env -u LD_LIBRARY_PATH "${MAGI_NODE}" -e "process.stdout.write(process.versions.node.split('.')[0])" 2>/dev/null) || {
     echo "[copilot-termux] Error: MAGI_NODE='${MAGI_NODE}' failed to execute." >&2
     exit 1
   }
