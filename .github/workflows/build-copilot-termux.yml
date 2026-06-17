@@ -63,11 +63,42 @@ jobs:
 
       - name: Patch .node RPATH
         run: |
-          PREBUILD="packages/copilot-termux/lib/copilot/prebuilds/linux-arm64"
-          GLIBC_ABS="$(realpath packages/copilot-termux/lib/glibc)"
-          for f in "$PREBUILD"/*.node; do
-            patchelf --set-rpath "$GLIBC_ABS" "$f" 2>/dev/null && echo "patched: $(basename $f)" || true
-          done
+          python3 - << 'PYEOF'
+          import os, subprocess, pathlib, sys
+
+          lib_dir = pathlib.Path("packages/copilot-termux/lib").resolve()
+          failed = []
+
+          for node_file in lib_dir.rglob("*.node"):
+              node_dir = node_file.parent.resolve()
+              rel = os.path.relpath(node_dir, lib_dir)
+
+              if rel == ".":
+                  rpath = "$ORIGIN/glibc"
+              else:
+                  depth = len(rel.split(os.sep))
+                  back = "/".join([".."] * depth)
+                  rpath = f"$ORIGIN/{back}/glibc"
+
+              file_result = subprocess.run(["file", str(node_file)], capture_output=True, text=True)
+              is_elf = "ELF" in file_result.stdout
+
+              result = subprocess.run(["patchelf", "--set-rpath", rpath, str(node_file)], capture_output=True, text=True)
+
+              if result.returncode == 0:
+                  print(f"patched: {node_file.name} -> {rpath}")
+              elif is_elf:
+                  print(f"FAILED ELF: {node_file.name}: {result.stderr.strip()}", file=sys.stderr)
+                  failed.append(str(node_file))
+              else:
+                  print(f"skip non-ELF: {node_file.name}")
+
+          if failed:
+              print(f"\nFATAL: failed to patch {len(failed)} ELF .node file(s):", file=sys.stderr)
+              for f in failed:
+                  print(f"  {f}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
 
       - name: Verify
         run: |

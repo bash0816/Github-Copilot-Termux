@@ -6,9 +6,7 @@
   "bin": {
     "copilot": "bin/copilot"
   },
-  "scripts": {
-    "postinstall": "node scripts/postinstall.js"
-  },
+  "scripts": {},
   "engines": {
     "node": ">=18"
   },
