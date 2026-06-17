@@ -7,8 +7,24 @@ while [ -L "${SELF}" ]; do
   case "${SELF}" in /*) ;; *) SELF="${DIR}/${SELF}" ;; esac
 done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
-NODE="${MAGI_NODE:-$PACKAGE_DIR/lib/node}"
-exec "$NODE" \
-  --require "$PACKAGE_DIR/lib/platform-patch.js" \
-  "$PACKAGE_DIR/lib/copilot/index.js" \
-  "$@"
+
+if [ -n "${MAGI_NODE:-}" ]; then
+  exec "${MAGI_NODE}" \
+    --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+    "${PACKAGE_DIR}/lib/copilot/index.js" \
+    "$@"
+fi
+
+LINKER="${PACKAGE_DIR}/lib/glibc/ld-linux-aarch64.so.1"
+NODE="${PACKAGE_DIR}/lib/node"
+
+if [ -f "${LINKER}" ] && [ -f "${NODE}" ]; then
+  exec "${LINKER}" --library-path "${PACKAGE_DIR}/lib/glibc" "${NODE}" \
+    --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+    "${PACKAGE_DIR}/lib/copilot/index.js" \
+    "$@"
+fi
+
+echo "[copilot-termux] Error: MAGI_NODE not set and bundled linker/node not found." >&2
+echo "[copilot-termux] Requires either MAGI_NODE env var or bundled lib/node + lib/glibc/." >&2
+exit 1
