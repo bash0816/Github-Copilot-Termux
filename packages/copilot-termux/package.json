@@ -7,6 +7,7 @@
     "copilot": "bin/copilot"
   },
   "scripts": {},
+  "files": ["bin", "lib", "LICENSE.md", "README.md"],
   "engines": {
     "node": ">=18"
   },

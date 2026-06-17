@@ -6,8 +6,8 @@ Object.defineProperty(process, 'platform', { value: 'linux', configurable: true 
 
 if (process.report) {
   const orig = process.report.getReport.bind(process.report);
-  process.report.getReport = () => {
-    const r = orig();
+  process.report.getReport = (...args) => {
+    const r = orig(...args);
     if (r && r.header) r.header.platform = 'linux';
     return r;
   };
