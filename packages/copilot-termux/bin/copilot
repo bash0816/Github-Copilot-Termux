@@ -9,7 +9,15 @@ done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
 
 if [ -n "${MAGI_NODE:-}" ]; then
-  exec "${MAGI_NODE}" \
+  _NODE_MAJOR=$("${MAGI_NODE}" -e "process.stdout.write(process.versions.node.split('.')[0])" 2>/dev/null) || {
+    echo "[copilot-termux] Error: MAGI_NODE='${MAGI_NODE}' failed to execute." >&2
+    exit 1
+  }
+  if [ "${_NODE_MAJOR:-0}" -lt 24 ] 2>/dev/null; then
+    echo "[copilot-termux] Error: MAGI_NODE requires Node.js v24+. Found v${_NODE_MAJOR}." >&2
+    exit 1
+  fi
+  exec env -u LD_LIBRARY_PATH "${MAGI_NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
     "${PACKAGE_DIR}/lib/copilot/index.js" \
     "$@"
@@ -19,12 +27,13 @@ LINKER="${PACKAGE_DIR}/lib/glibc/ld-linux-aarch64.so.1"
 NODE="${PACKAGE_DIR}/lib/node"
 
 if [ -f "${LINKER}" ] && [ -f "${NODE}" ]; then
-  exec "${LINKER}" --library-path "${PACKAGE_DIR}/lib/glibc" "${NODE}" \
+  exec env -u LD_LIBRARY_PATH "${LINKER}" \
+    --library-path "${PACKAGE_DIR}/lib/glibc" "${NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
     "${PACKAGE_DIR}/lib/copilot/index.js" \
     "$@"
 fi
 
 echo "[copilot-termux] Error: MAGI_NODE not set and bundled linker/node not found." >&2
-echo "[copilot-termux] Requires either MAGI_NODE env var or bundled lib/node + lib/glibc/." >&2
+echo "[copilot-termux] Set MAGI_NODE to a glibc-linked Node.js v24+ binary, or stage lib/node + lib/glibc/." >&2
 exit 1
