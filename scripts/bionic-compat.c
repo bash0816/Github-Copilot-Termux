@@ -70,16 +70,13 @@ static void compat_init(void) {
     _expf   = (fn_ff) dlsym(RTLD_NEXT, "expf");
     _log10f = (fn_ff) dlsym(RTLD_NEXT, "log10f");
     _sinf   = (fn_ff) dlsym(RTLD_NEXT, "sinf");
-    if (!_pow || !_log || !_log2 || !_expf || !_log10f || !_sinf) {
-        const char msg[] = "[bionic-compat] FATAL: libm.so math symbols not found via RTLD_NEXT\n";
-        write(2, msg, sizeof(msg) - 1);
-        abort();
-    }
+    /* NULL is expected in non-node processes (shells) that inherit LD_PRELOAD
+     * but do not link libm.so. Those processes never invoke math stubs. */
 }
 
-double pow(double x, double y)   { return _pow(x, y); }
-double log(double x)             { return _log(x); }
-double log2(double x)            { return _log2(x); }
-float  expf(float x)             { return _expf(x); }
-float  log10f(float x)           { return _log10f(x); }
-float  sinf(float x)             { return _sinf(x); }
+double pow(double x, double y)   { if (!_pow)    abort(); return _pow(x, y); }
+double log(double x)             { if (!_log)    abort(); return _log(x); }
+double log2(double x)            { if (!_log2)   abort(); return _log2(x); }
+float  expf(float x)             { if (!_expf)   abort(); return _expf(x); }
+float  log10f(float x)           { if (!_log10f) abort(); return _log10f(x); }
+float  sinf(float x)             { if (!_sinf)   abort(); return _sinf(x); }
