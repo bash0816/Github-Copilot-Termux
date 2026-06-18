@@ -110,11 +110,26 @@ jobs:
 
       - name: Verify
         run: |
-          GLIBC="$(realpath packages/copilot-termux/lib/glibc)"
-          LD_LIBRARY_PATH="$GLIBC" \
-            packages/copilot-termux/lib/node \
-            --require ./packages/copilot-termux/lib/platform-patch.js \
-            packages/copilot-termux/lib/copilot/index.js --version
+          # Check staged files exist
+          ls -lh packages/copilot-termux/lib/node
+          ls -lh packages/copilot-termux/lib/copilot/index.js
+          ls -lh packages/copilot-termux/lib/bionic-compat.so
+          ls -lh packages/copilot-termux/lib/platform-patch.js
+          ls packages/copilot-termux/lib/glibc/
+
+          # Check glibc Node binary works
+          packages/copilot-termux/lib/node --version
+
+          # Check platform-patch loads
+          packages/copilot-termux/lib/node \
+            -e "require('./packages/copilot-termux/lib/platform-patch.js'); console.log('platform-patch OK')"
+
+          # Confirm bionic-compat.so is ELF
+          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
+
+          # Note: runtime.node is a bionic (Android) binary and cannot be loaded on glibc CI.
+          # Functional verification (copilot --version) is done on Termux device after npm publish.
+          echo "Verify OK: staging complete"
 
       - name: Create artifact
         run: |
