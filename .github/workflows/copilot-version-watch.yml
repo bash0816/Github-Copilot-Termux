@@ -8,12 +8,15 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Check latest @github/copilot version
+        id: check_version
         run: |
           LATEST=$(npm view @github/copilot version)
           CURRENT=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.copilot_version || 'none')")
@@ -25,3 +28,16 @@ jobs:
           else
             echo "No new version"
           fi
+      - name: Trigger build for new version
+        if: steps.check_version.outputs.new_version != ''
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+          NODE_GLIBC_TAG=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.nodejs_glibc_version || 'node-glibc-v24.15.0')")
+          echo "Triggering build for @github/copilot@${NEW_VERSION} with ${NODE_GLIBC_TAG}"
+          gh workflow run build-copilot-termux.yml \
+            --ref "${{ github.ref_name }}" \
+            --field "copilot_version=${NEW_VERSION}" \
+            --field "node_glibc_tag=${NODE_GLIBC_TAG}"
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,3 +1,4 @@
 lib/node
 lib/glibc/
 lib/copilot/
+lib/bionic-compat.so

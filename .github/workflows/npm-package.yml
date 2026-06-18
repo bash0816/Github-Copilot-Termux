@@ -3,6 +3,9 @@ name: npm package
 on:
   workflow_dispatch:
     inputs:
+      build_run_id:
+        description: 'Run ID from build-copilot-termux.yml'
+        required: true
       publish:
         description: 'Publish to npm'
         type: boolean
@@ -14,35 +17,147 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-24.04-arm
+    permissions:
+      actions: read
     steps:
       - uses: actions/checkout@v4
-      - name: Verify package
-        run: |
-          node packages/copilot-termux/lib/node --version 2>/dev/null || echo "node binary not staged yet"
 
-  preflight:
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Preflight check
+      - name: Download build artifact
         run: |
-          cat packages/copilot-termux/package.json
+          set -euo pipefail
+          gh run download "${{ inputs.build_run_id }}" \
+            --repo "${{ github.repository }}" \
+            --dir ./artifact/
+          ls -lh ./artifact/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Verify sha256
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ 2>/dev/null | head -1)
+          [ -d "$ARTIFACT_DIR" ] || { echo "ERROR: artifact dir not found"; exit 1; }
+          TARBALL=$(ls "${ARTIFACT_DIR}"copilot-termux-*.tar.gz 2>/dev/null | head -1)
+          SHA256FILE=$(ls "${ARTIFACT_DIR}"copilot-termux-*.tar.gz.sha256 2>/dev/null | head -1)
+          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
+          [ -f "$SHA256FILE" ] || { echo "ERROR: sha256 file not found"; exit 1; }
+          (cd "$ARTIFACT_DIR" && sha256sum -c "$(basename "$SHA256FILE")")
+
+      - name: Extract staged files
+        run: |
+          set -euo pipefail
+          TARBALL=$(ls artifact/copilot-termux-*/copilot-termux-*.tar.gz 2>/dev/null | head -1)
+          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
+          tar -xzf "$TARBALL"
+          ls -lh packages/copilot-termux/lib/
+
+      - name: Verify binary
+        run: |
+          set -euo pipefail
+          GLIBC="$(realpath packages/copilot-termux/lib/glibc)"
+          LD_LIBRARY_PATH="$GLIBC" \
+            packages/copilot-termux/lib/node \
+            --require packages/copilot-termux/lib/platform-patch.js \
+            packages/copilot-termux/lib/copilot/index.js --version
 
   publish:
-    needs: preflight
-    if: ${{ inputs.publish == true }}
+    needs: verify
+    if: ${{ fromJSON(inputs.publish) }}
     runs-on: ubuntu-latest
     environment: npm-publish
+    permissions:
+      actions: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Download build artifact
+        run: |
+          set -euo pipefail
+          gh run download "${{ inputs.build_run_id }}" \
+            --repo "${{ github.repository }}" \
+            --dir ./artifact/
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Extract staged files
+        run: |
+          set -euo pipefail
+          TARBALL=$(ls artifact/copilot-termux-*/copilot-termux-*.tar.gz 2>/dev/null | head -1)
+          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
+          tar -xzf "$TARBALL"
+
+      - name: Sync package version
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ | head -1)
+          VERSION=$(basename "$ARTIFACT_DIR" | sed 's/copilot-termux-\(.*\)-linux-arm64/\1/')
+          echo "Target version: $VERSION"
+          CURRENT=$(node -p "require('./packages/copilot-termux/package.json').version")
+          if [ "$CURRENT" != "$VERSION" ]; then
+            cd packages/copilot-termux
+            npm version --no-git-tag-version "$VERSION"
+          else
+            echo "Version already $VERSION, no change needed"
+          fi
+
+      - name: Assert package contents
+        run: |
+          set -euo pipefail
+          for f in bin/copilot lib/node lib/copilot/index.js lib/platform-patch.js lib/bionic-compat.so; do
+            [ -f "packages/copilot-termux/$f" ] || { echo "ERROR: $f missing from package"; exit 1; }
+          done
+          [ -d "packages/copilot-termux/lib/glibc" ] && \
+            [ -n "$(ls -A packages/copilot-termux/lib/glibc)" ] || \
+            { echo "ERROR: lib/glibc is empty or missing"; exit 1; }
+          echo "All required files present"
+          ls -lh packages/copilot-termux/lib/
+          ls -lh packages/copilot-termux/lib/glibc/
+
+      - name: Validate npm_tag
+        run: |
+          case "${{ inputs.npm_tag }}" in
+            candidate|latest) ;;
+            *) echo "ERROR: npm_tag must be 'candidate' or 'latest', got: ${{ inputs.npm_tag }}"; exit 1 ;;
+          esac
+
       - name: Publish to npm
         run: |
           cd packages/copilot-termux
-          npm publish --tag ${{ inputs.npm_tag }} --access public
+          npm publish --tag "${{ inputs.npm_tag }}" --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update manifest
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ | head -1)
+          VERSION=$(basename "$ARTIFACT_DIR" | sed 's/copilot-termux-\(.*\)-linux-arm64/\1/')
+          MANIFEST="config/copilot-termux-release-manifest.json"
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
+            m.copilot_version = '$VERSION';
+            m.build_run_id = '${{ inputs.build_run_id }}';
+            m.last_updated = new Date().toISOString().slice(0,10);
+            if ('${{ inputs.npm_tag }}' === 'candidate') {
+              m.latest_candidate_version = '$VERSION';
+              m.candidate_state = 'published';
+            } else {
+              m.latest_audited_version = '$VERSION';
+              m.candidate_state = 'promoted';
+              m.canonical_package_status = 'published';
+              m.public_distribution_status = 'published';
+            }
+            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git diff --staged --quiet || git commit -m "chore: update manifest after publish @${{ inputs.npm_tag }} v${VERSION}"
+          git push
