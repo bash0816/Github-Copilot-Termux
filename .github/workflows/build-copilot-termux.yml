@@ -27,6 +27,14 @@ jobs:
       - name: Install patchelf
         run: sudo apt-get install -y patchelf
 
+      - name: Compile bionic-compat.so
+        run: |
+          command -v gcc >/dev/null || sudo apt-get install -y gcc
+          gcc -shared -fPIC -nostdlib -fno-stack-protector \
+            -o packages/copilot-termux/lib/bionic-compat.so \
+            scripts/bionic-compat.c
+          file packages/copilot-termux/lib/bionic-compat.so
+
       - name: Download glibc Node.js artifact
         run: |
           TAG="${{ inputs.node_glibc_tag }}"
@@ -112,7 +120,8 @@ jobs:
         run: |
           VERSION="${{ inputs.copilot_version }}"
           tar -czf "copilot-termux-${VERSION}-linux-arm64.tar.gz" \
-            packages/copilot-termux/lib/
+            packages/copilot-termux/lib/ \
+            packages/copilot-termux/bin/
           sha256sum "copilot-termux-${VERSION}-linux-arm64.tar.gz" \
             > "copilot-termux-${VERSION}-linux-arm64.tar.gz.sha256"
 
