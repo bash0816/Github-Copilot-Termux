@@ -2,12 +2,12 @@
   "name": "@bash0816/copilot-termux",
   "version": "1.0.63",
   "description": "GitHub Copilot CLI for Termux (Android aarch64)",
-  "license": "Apache-2.0",
+  "license": "GPL-3.0-only",
   "bin": {
     "copilot": "bin/copilot"
   },
   "scripts": {},
-  "files": ["bin", "lib", "LICENSE.md", "README.md"],
+  "files": ["bin", "lib", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
   "engines": {
     "node": ">=18"
   },
