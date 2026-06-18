@@ -17,7 +17,14 @@ if [ -n "${MAGI_NODE:-}" ]; then
     echo "[copilot-termux] Error: MAGI_NODE requires Node.js v24+. Found v${_NODE_MAJOR}." >&2
     exit 1
   fi
-  exec env -u LD_LIBRARY_PATH "${MAGI_NODE}" \
+  _COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
+  [ -f "${_COMPAT}" ] || {
+    echo "[copilot-termux] Error: lib/bionic-compat.so not found. Run stage-copilot.sh first." >&2
+    exit 1
+  }
+  exec env -u LD_LIBRARY_PATH \
+    LD_PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}" \
+    "${MAGI_NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
     "${PACKAGE_DIR}/lib/copilot/index.js" \
     "$@"
@@ -35,5 +42,6 @@ if [ -f "${LINKER}" ] && [ -f "${NODE}" ]; then
 fi
 
 echo "[copilot-termux] Error: MAGI_NODE not set and bundled linker/node not found." >&2
-echo "[copilot-termux] Set MAGI_NODE to a glibc-linked Node.js v24+ binary, or stage lib/node + lib/glibc/." >&2
+echo "[copilot-termux] On Termux: set MAGI_NODE=\$(which node) (bionic Node.js v24+)." >&2
+echo "[copilot-termux] Bundled glibc Node.js (lib/node) does not work on Android (seccomp)." >&2
 exit 1
