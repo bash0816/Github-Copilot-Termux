@@ -75,8 +75,8 @@ cp -r "$PACK_DIR/package/." "$STAGING_DIR/"
 [[ -f "$STAGING_DIR/package.json" ]] || { echo "Error: staged copilot missing package.json" >&2; exit 1; }
 # npm pack verifies tarball integrity against registry dist.integrity internally.
 # Also confirm the extracted package name and version match expectations.
-_PKG_NAME=$(node -e   'try{process.stdout.write(require(process.argv[2]).name||"")}catch(e){}'   "${STAGING_DIR}/package.json" 2>/dev/null)
-_PKG_VER=$(node -e   'try{process.stdout.write(require(process.argv[2]).version||"")}catch(e){}'   "${STAGING_DIR}/package.json" 2>/dev/null)
+_PKG_NAME=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.name||"")}catch(e){}' "${STAGING_DIR}/package.json" 2>/dev/null)
+_PKG_VER=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.version||"")}catch(e){}' "${STAGING_DIR}/package.json" 2>/dev/null)
 [[ "$_PKG_NAME" == "@github/copilot" ]] || {
   echo "Error: unexpected package name in staged tarball: ${_PKG_NAME}" >&2; exit 1
 }
