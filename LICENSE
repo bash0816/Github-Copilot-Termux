@@ -1,0 +1,11 @@
+This repository (bash0816/Copilot-Termux) contains:
+
+(1) Wrapper code (packages/copilot-termux/bin/, packages/copilot-termux/lib/platform-patch.js,
+    packages/copilot-termux/lib/bionic-compat.so, scripts/, config/, docs/, .github/workflows/):
+    Copyright (C) 2025-2026 bash0816
+    Licensed under the GNU General Public License v3.0 only (GPL-3.0-only).
+    See packages/copilot-termux/LICENSE for the full license text.
+
+(2) Bundled third-party software (packages/copilot-termux/lib/copilot/,
+    packages/copilot-termux/lib/node, packages/copilot-termux/lib/glibc/):
+    See packages/copilot-termux/THIRD-PARTY-NOTICES.md for license details.
