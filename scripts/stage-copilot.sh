@@ -20,6 +20,9 @@ done
 
 [[ -z "$COPILOT_VERSION" ]] && \
   { echo "Usage: $0 --copilot-version X.Y.Z [--node-artifact PATH --glibc-dir PATH]" >&2; exit 1; }
+if [[ ! "$COPILOT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Error: --copilot-version must be X.Y.Z (e.g., 1.0.0)" >&2; exit 1
+fi
 if [[ -n "$NODE_ARTIFACT" && -z "$GLIBC_DIR" ]] || \
    [[ -z "$NODE_ARTIFACT" && -n "$GLIBC_DIR" ]]; then
   echo "Error: --node-artifact and --glibc-dir must be specified together" >&2; exit 1
@@ -70,6 +73,17 @@ shopt -u nullglob
 tar -xzf "${TARBALLS[0]}" -C "$PACK_DIR"
 cp -r "$PACK_DIR/package/." "$STAGING_DIR/"
 [[ -f "$STAGING_DIR/package.json" ]] || { echo "Error: staged copilot missing package.json" >&2; exit 1; }
+# npm pack verifies tarball integrity against registry dist.integrity internally.
+# Also confirm the extracted package name and version match expectations.
+_PKG_NAME=$(node -e   'try{process.stdout.write(require(process.argv[2]).name||"")}catch(e){}'   "${STAGING_DIR}/package.json" 2>/dev/null)
+_PKG_VER=$(node -e   'try{process.stdout.write(require(process.argv[2]).version||"")}catch(e){}'   "${STAGING_DIR}/package.json" 2>/dev/null)
+[[ "$_PKG_NAME" == "@github/copilot" ]] || {
+  echo "Error: unexpected package name in staged tarball: ${_PKG_NAME}" >&2; exit 1
+}
+[[ "$_PKG_VER" == "$COPILOT_VERSION" ]] || {
+  echo "Error: version mismatch: expected ${COPILOT_VERSION}, got ${_PKG_VER}" >&2; exit 1
+}
+echo "Verified: ${_PKG_NAME}@${_PKG_VER}"
 
 if [[ -d "$LIB_DIR/copilot" ]]; then
   mv "$LIB_DIR/copilot" "$BACKUP_DIR"
