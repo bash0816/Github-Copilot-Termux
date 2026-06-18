@@ -57,7 +57,7 @@ jobs:
           GLIBC="$(realpath packages/copilot-termux/lib/glibc)"
           LD_LIBRARY_PATH="$GLIBC" \
             packages/copilot-termux/lib/node \
-            --require packages/copilot-termux/lib/platform-patch.js \
+            --require ./packages/copilot-termux/lib/platform-patch.js \
             packages/copilot-termux/lib/copilot/index.js --version
 
   publish:
