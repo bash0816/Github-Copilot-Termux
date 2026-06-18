@@ -1,6 +1,6 @@
 {
   "name": "@bash0816/copilot-termux",
-  "version": "0.0.1",
+  "version": "1.0.63",
   "description": "GitHub Copilot CLI for Termux (Android aarch64)",
   "license": "Apache-2.0",
   "bin": {
