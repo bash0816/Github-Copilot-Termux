@@ -23,6 +23,31 @@ if [ ! -f "${COPILOT_INDEX}" ]; then
 fi
 
 if [ -n "${MAGI_NODE:-}" ]; then
+  MAGI_NODE_VERSION="$("${MAGI_NODE}" --version 2>/dev/null || true)"
+  MAGI_NODE_MAJOR=""
+  if [ -n "${MAGI_NODE_VERSION}" ]; then
+    MAGI_NODE_VERSION="${MAGI_NODE_VERSION#v}"
+    MAGI_NODE_MAJOR="${MAGI_NODE_VERSION%%.*}"
+  fi
+
+  case "${MAGI_NODE_MAJOR}" in
+    ''|*[!0-9]*)
+      echo "[copilot-termux] MAGI_NODE version check failed; falling back to node" >&2
+      exec node \
+        --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+        "${COPILOT_INDEX}" \
+        "$@"
+      ;;
+  esac
+
+  if [ "${MAGI_NODE_MAJOR}" -lt 24 ]; then
+    echo "[copilot-termux] MAGI_NODE ${MAGI_NODE_VERSION} is below v24; falling back to node" >&2
+    exec node \
+      --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+      "${COPILOT_INDEX}" \
+      "$@"
+  fi
+
   _COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
   if [ -f "${_COMPAT}" ]; then
     exec env -u LD_LIBRARY_PATH \

@@ -8,7 +8,7 @@
     "copilot-termux": "bin/copilot-termux"
   },
   "scripts": {},
-  "files": ["bin", "lib", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
+  "files": ["bin", "lib/platform-patch.js", "lib/setup.js", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
   "engines": {
     "node": ">=18"
   },
