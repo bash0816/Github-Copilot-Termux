@@ -51,6 +51,23 @@ jobs:
           tar -xzf "$TARBALL"
           ls -lh packages/copilot-termux/lib/
 
+      - name: Build bionic-compat.so
+        run: |
+          set -euo pipefail
+          if command -v clang >/dev/null 2>&1; then
+            CC=clang
+          elif command -v gcc >/dev/null 2>&1; then
+            CC=gcc
+          else
+            echo "ERROR: clang or gcc is required" >&2
+            exit 1
+          fi
+          "$CC" -shared -fPIC -nostdlib -fno-stack-protector \
+            -o packages/copilot-termux/lib/bionic-compat.so \
+            scripts/bionic-compat.c
+          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
+          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
+
       - name: Verify binary
         run: |
           set -euo pipefail
@@ -124,7 +141,7 @@ jobs:
       - name: Assert package contents
         run: |
           set -euo pipefail
-          for f in bin/copilot lib/node lib/copilot/index.js lib/platform-patch.js lib/bionic-compat.so; do
+          for f in bin/copilot lib/node lib/copilot/index.js lib/platform-patch.js lib/bionic-compat.so scripts/bionic-compat.c; do
             [ -f "packages/copilot-termux/$f" ] || { echo "ERROR: $f missing from package"; exit 1; }
           done
           [ -d "packages/copilot-termux/lib/glibc" ] && \
@@ -133,6 +150,16 @@ jobs:
           echo "All required files present"
           ls -lh packages/copilot-termux/lib/
           ls -lh packages/copilot-termux/lib/glibc/
+
+      - name: Pack npm tarball
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/npm-pack"
+          TARBALL=$(cd packages/copilot-termux && npm pack --pack-destination "$RUNNER_TEMP/npm-pack" --silent)
+          echo "Packed tarball: $RUNNER_TEMP/npm-pack/$TARBALL"
+          tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/lib/bionic-compat.so'
+          tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/scripts/bionic-compat.c'
+          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
 
       - name: Validate npm_tag
         run: |
