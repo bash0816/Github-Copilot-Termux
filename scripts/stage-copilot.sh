@@ -51,7 +51,7 @@ trap '
 ' EXIT
 
 # 0. Compile bionic-compat.so BEFORE any staging changes.
-COMPAT_SRC="$REPO_DIR/scripts/bionic-compat.c"
+COMPAT_SRC="$REPO_DIR/packages/copilot-termux/scripts/bionic-compat.c"
 COMPAT_STAGED="$PACK_DIR/bionic-compat.so"
 if command -v clang >/dev/null 2>&1; then
   clang -shared -fPIC -o "$COMPAT_STAGED" "$COMPAT_SRC" -lc -ldl || {
