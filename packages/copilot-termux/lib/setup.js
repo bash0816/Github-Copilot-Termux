@@ -52,7 +52,7 @@ async function setup() {
   const versionDir = path.join(CACHE_DIR, version);
   const stagingDir = `${versionDir}.staging`;
 
-  if (fs.existsSync(versionDir)) {
+  if (fs.existsSync(path.join(versionDir, 'index.js'))) {
     fs.rmSync(stagingDir, { recursive: true, force: true });
     console.log(`@github/copilot@${version} already installed, refreshing symlink...`);
   } else {
