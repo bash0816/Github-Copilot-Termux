@@ -64,7 +64,7 @@ jobs:
           fi
           "$CC" -shared -fPIC -nostdlib -fno-stack-protector \
             -o packages/copilot-termux/lib/bionic-compat.so \
-            scripts/bionic-compat.c
+            packages/copilot-termux/scripts/bionic-compat.c
           readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
           file packages/copilot-termux/lib/bionic-compat.so | grep ELF
 
@@ -123,6 +123,23 @@ jobs:
           TARBALL=$(ls artifact/copilot-termux-*/copilot-termux-*.tar.gz 2>/dev/null | head -1)
           [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
           tar -xzf "$TARBALL"
+
+      - name: Build bionic-compat.so
+        run: |
+          set -euo pipefail
+          if command -v clang >/dev/null 2>&1; then
+            CC=clang
+          elif command -v gcc >/dev/null 2>&1; then
+            CC=gcc
+          else
+            echo "ERROR: clang or gcc is required" >&2
+            exit 1
+          fi
+          "$CC" -shared -fPIC -nostdlib -fno-stack-protector \
+            -o packages/copilot-termux/lib/bionic-compat.so \
+            packages/copilot-termux/scripts/bionic-compat.c
+          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
+          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
 
       - name: Sync package version
         run: |
