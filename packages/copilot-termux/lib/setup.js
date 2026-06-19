@@ -50,8 +50,10 @@ async function fetchWithIntegrity(url, expectedIntegrity) {
 async function setup() {
   const { version, integrity } = manifest.copilot;
   const versionDir = path.join(CACHE_DIR, version);
+  const stagingDir = `${versionDir}.staging`;
 
-  if (fs.existsSync(path.join(versionDir, 'index.js'))) {
+  if (fs.existsSync(versionDir)) {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
     console.log(`@github/copilot@${version} already installed, refreshing symlink...`);
   } else {
     console.log(`Fetching @github/copilot@${version} metadata...`);
@@ -62,13 +64,28 @@ async function setup() {
     console.log(`Downloading @github/copilot@${version}...`);
     const tarball = await fetchWithIntegrity(tarballUrl, integrity);
 
-    fs.mkdirSync(versionDir, { recursive: true });
     const tarballPath = path.join(CACHE_DIR, `copilot-${version}.tgz`);
-    fs.writeFileSync(tarballPath, tarball);
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
 
-    console.log('Extracting...');
-    execFileSync('tar', ['-xzf', tarballPath, '-C', versionDir, '--strip-components=1']);
-    fs.unlinkSync(tarballPath);
+    try {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+      fs.writeFileSync(tarballPath, tarball);
+
+      console.log('Extracting...');
+      fs.mkdirSync(stagingDir, { recursive: true });
+      execFileSync('tar', ['-xzf', tarballPath, '-C', stagingDir, '--strip-components=1']);
+
+      if (!fs.existsSync(path.join(stagingDir, 'index.js'))) {
+        throw new Error(`installation incomplete: missing ${path.join(stagingDir, 'index.js')}`);
+      }
+
+      fs.renameSync(stagingDir, versionDir);
+    } catch (err) {
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+      throw err;
+    } finally {
+      fs.rmSync(tarballPath, { force: true });
+    }
   }
 
   const currentLink = path.join(CACHE_DIR, 'current');
