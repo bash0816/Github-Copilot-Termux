@@ -51,20 +51,10 @@ jobs:
           tar -xzf "$TARBALL"
           ls -lh packages/copilot-termux/lib/
 
-      - name: Build bionic-compat.so
+      - name: Verify committed bionic-compat.so
         run: |
           set -euo pipefail
-          if command -v clang >/dev/null 2>&1; then
-            CC=clang
-          elif command -v gcc >/dev/null 2>&1; then
-            CC=gcc
-          else
-            echo "ERROR: clang or gcc is required" >&2
-            exit 1
-          fi
-          "$CC" -shared -fPIC -nostdlib -fno-stack-protector \
-            -o packages/copilot-termux/lib/bionic-compat.so \
-            packages/copilot-termux/scripts/bionic-compat.c
+          [ -f packages/copilot-termux/lib/bionic-compat.so ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
           readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
           file packages/copilot-termux/lib/bionic-compat.so | grep ELF
 
@@ -124,20 +114,10 @@ jobs:
           [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
           tar -xzf "$TARBALL"
 
-      - name: Build bionic-compat.so
+      - name: Verify committed bionic-compat.so
         run: |
           set -euo pipefail
-          if command -v clang >/dev/null 2>&1; then
-            CC=clang
-          elif command -v gcc >/dev/null 2>&1; then
-            CC=gcc
-          else
-            echo "ERROR: clang or gcc is required" >&2
-            exit 1
-          fi
-          "$CC" -shared -fPIC -nostdlib -fno-stack-protector \
-            -o packages/copilot-termux/lib/bionic-compat.so \
-            packages/copilot-termux/scripts/bionic-compat.c
+          [ -f packages/copilot-termux/lib/bionic-compat.so ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
           readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
           file packages/copilot-termux/lib/bionic-compat.so | grep ELF
 
@@ -176,7 +156,6 @@ jobs:
           echo "Packed tarball: $RUNNER_TEMP/npm-pack/$TARBALL"
           tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/lib/bionic-compat.so'
           tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/scripts/bionic-compat.c'
-          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
 
       - name: Validate npm_tag
         run: |
