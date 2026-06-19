@@ -79,6 +79,9 @@ async function setup() {
         throw new Error(`installation incomplete: missing ${path.join(stagingDir, 'index.js')}`);
       }
 
+      if (fs.existsSync(versionDir)) {
+        fs.rmSync(versionDir, { recursive: true, force: true });
+      }
       fs.renameSync(stagingDir, versionDir);
     } catch (err) {
       fs.rmSync(stagingDir, { recursive: true, force: true });
