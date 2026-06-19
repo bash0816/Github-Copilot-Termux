@@ -8,40 +8,37 @@ while [ -L "${SELF}" ]; do
 done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
 
+CACHE_DIR="${HOME}/.copilot-termux"
+CURRENT="${CACHE_DIR}/current"
+
+if [ ! -d "${CURRENT}" ]; then
+  echo "[copilot-termux] Not set up. Run: copilot-termux setup" >&2
+  exit 1
+fi
+
+COPILOT_INDEX="${CURRENT}/index.js"
+if [ ! -f "${COPILOT_INDEX}" ]; then
+  echo "[copilot-termux] Installation broken. Run: copilot-termux setup" >&2
+  exit 1
+fi
+
 if [ -n "${MAGI_NODE:-}" ]; then
-  _NODE_MAJOR=$(env -u LD_LIBRARY_PATH "${MAGI_NODE}" -e "process.stdout.write(process.versions.node.split('.')[0])" 2>/dev/null) || {
-    echo "[copilot-termux] Error: MAGI_NODE='${MAGI_NODE}' failed to execute." >&2
-    exit 1
-  }
-  if [ "${_NODE_MAJOR:-0}" -lt 24 ] 2>/dev/null; then
-    echo "[copilot-termux] Error: MAGI_NODE requires Node.js v24+. Found v${_NODE_MAJOR}." >&2
-    exit 1
-  fi
   _COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
-  [ -f "${_COMPAT}" ] || {
-    echo "[copilot-termux] Error: lib/bionic-compat.so not found. Run stage-copilot.sh first." >&2
-    exit 1
-  }
-  exec env -u LD_LIBRARY_PATH \
-    LD_PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}" \
-    "${MAGI_NODE}" \
+  if [ -f "${_COMPAT}" ]; then
+    exec env -u LD_LIBRARY_PATH \
+      LD_PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}" \
+      "${MAGI_NODE}" \
+      --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+      "${COPILOT_INDEX}" \
+      "$@"
+  fi
+  exec env -u LD_LIBRARY_PATH "${MAGI_NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-    "${PACKAGE_DIR}/lib/copilot/index.js" \
+    "${COPILOT_INDEX}" \
     "$@"
 fi
 
-LINKER="${PACKAGE_DIR}/lib/glibc/ld-linux-aarch64.so.1"
-NODE="${PACKAGE_DIR}/lib/node"
-
-if [ -f "${LINKER}" ] && [ -f "${NODE}" ]; then
-  exec env -u LD_LIBRARY_PATH "${LINKER}" \
-    --library-path "${PACKAGE_DIR}/lib/glibc" "${NODE}" \
-    --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-    "${PACKAGE_DIR}/lib/copilot/index.js" \
-    "$@"
-fi
-
-echo "[copilot-termux] Error: MAGI_NODE not set and bundled linker/node not found." >&2
-echo "[copilot-termux] On Termux: set MAGI_NODE=\$(which node) (bionic Node.js v24+)." >&2
-echo "[copilot-termux] Bundled glibc Node.js (lib/node) does not work on Android (seccomp)." >&2
-exit 1
+exec node \
+  --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+  "${COPILOT_INDEX}" \
+  "$@"

@@ -4,10 +4,11 @@
   "description": "GitHub Copilot CLI for Termux (Android aarch64)",
   "license": "GPL-3.0-only",
   "bin": {
-    "copilot": "bin/copilot"
+    "copilot": "bin/copilot",
+    "copilot-termux": "bin/copilot-termux"
   },
   "scripts": {},
-  "files": ["bin", "lib", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
+  "files": ["bin", "lib", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
   "engines": {
     "node": ">=18"
   },
