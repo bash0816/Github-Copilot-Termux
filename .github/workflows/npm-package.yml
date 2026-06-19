@@ -3,9 +3,6 @@ name: npm package
 on:
   workflow_dispatch:
     inputs:
-      build_run_id:
-        description: 'Run ID from build-copilot-termux.yml'
-        required: true
       publish:
         description: 'Publish to npm'
         type: boolean
@@ -17,79 +14,51 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-24.04-arm
-    permissions:
-      actions: read
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download build artifact
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify bionic-compat.so
         run: |
           set -euo pipefail
-          gh run download "${{ inputs.build_run_id }}" \
-            --repo "${{ github.repository }}" \
-            --dir ./artifact/
-          ls -lh ./artifact/
-        env:
-          GH_TOKEN: ${{ github.token }}
+          SO=packages/copilot-termux/lib/bionic-compat.so
+          [ -f "$SO" ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
+          readelf -h "$SO" | grep -q 'AArch64' || { echo "ERROR: not AArch64 ELF"; exit 1; }
+          for sym in bcmp sdallocx __errno_location __xpg_strerror_r; do
+            nm -D "$SO" | grep -qP "^[0-9a-f]+ T ${sym}$" || { echo "ERROR: Bionic symbol ${sym} not found"; exit 1; }
+          done
+          echo "bionic-compat.so: AArch64 + Bionic symbols OK"
+          file "$SO"
 
-      - name: Verify sha256
+      - name: Pack npm tarball
         run: |
           set -euo pipefail
-          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ 2>/dev/null | head -1)
-          [ -d "$ARTIFACT_DIR" ] || { echo "ERROR: artifact dir not found"; exit 1; }
-          TARBALL=$(ls "${ARTIFACT_DIR}"copilot-termux-*.tar.gz 2>/dev/null | head -1)
-          SHA256FILE=$(ls "${ARTIFACT_DIR}"copilot-termux-*.tar.gz.sha256 2>/dev/null | head -1)
-          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
-          [ -f "$SHA256FILE" ] || { echo "ERROR: sha256 file not found"; exit 1; }
-          (cd "$ARTIFACT_DIR" && sha256sum -c "$(basename "$SHA256FILE")")
+          mkdir -p "$RUNNER_TEMP/npm-pack"
+          cd packages/copilot-termux
+          TARBALL=$(npm pack --pack-destination "$RUNNER_TEMP/npm-pack" --silent)
+          echo "TARBALL=$RUNNER_TEMP/npm-pack/$TARBALL" >> "$GITHUB_ENV"
+          echo "Packed: $TARBALL"
 
-      - name: Extract staged files
+      - name: Verify tarball contents
         run: |
           set -euo pipefail
-          TARBALL=$(ls artifact/copilot-termux-*/copilot-termux-*.tar.gz 2>/dev/null | head -1)
-          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
-          tar -xzf "$TARBALL"
-          ls -lh packages/copilot-termux/lib/
-
-      - name: Verify committed bionic-compat.so
-        run: |
-          set -euo pipefail
-          [ -f packages/copilot-termux/lib/bionic-compat.so ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
-          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
-          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
-
-      - name: Verify binary
-        run: |
-          set -euo pipefail
-          # Check staged files exist
-          ls -lh packages/copilot-termux/lib/node
-          ls -lh packages/copilot-termux/lib/copilot/index.js
-          ls -lh packages/copilot-termux/lib/bionic-compat.so
-          ls -lh packages/copilot-termux/lib/platform-patch.js
-          ls packages/copilot-termux/lib/glibc/
-
-          # Check glibc Node binary works
-          packages/copilot-termux/lib/node --version
-
-          # Check platform-patch loads
-          packages/copilot-termux/lib/node \
-            -e "require('./packages/copilot-termux/lib/platform-patch.js'); console.log('platform-patch OK')"
-
-          # Confirm bionic-compat.so is ELF
-          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
-
-          # Note: runtime.node is a musl native addon for Termux/bionic compatibility and cannot be loaded on glibc CI.
-          # Functional verification (copilot --version) is done on Termux device after npm publish.
-          echo "Verify OK: staging complete"
+          tar -tzf "$TARBALL" | grep -Fx 'package/lib/bionic-compat.so' || { echo "ERROR: bionic-compat.so not in tarball"; exit 1; }
+          tar -tzf "$TARBALL" | grep -Fx 'package/scripts/bionic-compat.c' || { echo "ERROR: bionic-compat.c not in tarball"; exit 1; }
+          tar -tzf "$TARBALL" | grep -Fx 'package/lib/setup.js' || { echo "ERROR: setup.js not in tarball"; exit 1; }
+          echo "Tarball contents OK"
 
   publish:
     needs: verify
     if: ${{ fromJSON(inputs.publish) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     environment: npm-publish
     permissions:
-      actions: read
       contents: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -97,65 +66,6 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Download build artifact
-        run: |
-          set -euo pipefail
-          gh run download "${{ inputs.build_run_id }}" \
-            --repo "${{ github.repository }}" \
-            --dir ./artifact/
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Extract staged files
-        run: |
-          set -euo pipefail
-          TARBALL=$(ls artifact/copilot-termux-*/copilot-termux-*.tar.gz 2>/dev/null | head -1)
-          [ -f "$TARBALL" ] || { echo "ERROR: tarball not found"; exit 1; }
-          tar -xzf "$TARBALL"
-
-      - name: Verify committed bionic-compat.so
-        run: |
-          set -euo pipefail
-          [ -f packages/copilot-termux/lib/bionic-compat.so ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
-          readelf -h packages/copilot-termux/lib/bionic-compat.so | grep -q 'AArch64'
-          file packages/copilot-termux/lib/bionic-compat.so | grep ELF
-
-      - name: Sync package version
-        run: |
-          set -euo pipefail
-          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ | head -1)
-          VERSION=$(basename "$ARTIFACT_DIR" | sed 's/copilot-termux-\(.*\)-linux-arm64/\1/')
-          echo "Target version: $VERSION"
-          CURRENT=$(node -p "require('./packages/copilot-termux/package.json').version")
-          if [ "$CURRENT" != "$VERSION" ]; then
-            cd packages/copilot-termux
-            npm version --no-git-tag-version "$VERSION"
-          else
-            echo "Version already $VERSION, no change needed"
-          fi
-
-      - name: Assert package contents
-        run: |
-          set -euo pipefail
-          for f in bin/copilot lib/node lib/copilot/index.js lib/platform-patch.js lib/bionic-compat.so scripts/bionic-compat.c; do
-            [ -f "packages/copilot-termux/$f" ] || { echo "ERROR: $f missing from package"; exit 1; }
-          done
-          [ -d "packages/copilot-termux/lib/glibc" ] && \
-            [ -n "$(ls -A packages/copilot-termux/lib/glibc)" ] || \
-            { echo "ERROR: lib/glibc is empty or missing"; exit 1; }
-          echo "All required files present"
-          ls -lh packages/copilot-termux/lib/
-          ls -lh packages/copilot-termux/lib/glibc/
-
-      - name: Pack npm tarball
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/npm-pack"
-          TARBALL=$(cd packages/copilot-termux && npm pack --pack-destination "$RUNNER_TEMP/npm-pack" --silent)
-          echo "Packed tarball: $RUNNER_TEMP/npm-pack/$TARBALL"
-          tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/lib/bionic-compat.so'
-          tar -tzf "$RUNNER_TEMP/npm-pack/$TARBALL" | grep -Fx 'package/scripts/bionic-compat.c'
 
       - name: Validate npm_tag
         run: |
@@ -174,14 +84,11 @@ jobs:
       - name: Update manifest
         run: |
           set -euo pipefail
-          ARTIFACT_DIR=$(ls -d artifact/copilot-termux-*/ | head -1)
-          VERSION=$(basename "$ARTIFACT_DIR" | sed 's/copilot-termux-\(.*\)-linux-arm64/\1/')
+          VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
           MANIFEST="config/copilot-termux-release-manifest.json"
           node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-            m.copilot_version = '$VERSION';
-            m.build_run_id = '${{ inputs.build_run_id }}';
             m.last_updated = new Date().toISOString().slice(0,10);
             if ('${{ inputs.npm_tag }}' === 'candidate') {
               m.latest_candidate_version = '$VERSION';
@@ -189,13 +96,11 @@ jobs:
             } else {
               m.latest_audited_version = '$VERSION';
               m.candidate_state = 'promoted';
-              m.canonical_package_status = 'published';
-              m.public_distribution_status = 'published';
             }
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$MANIFEST"
-          git diff --staged --quiet || git commit -m "chore: update manifest after publish @${{ inputs.npm_tag }} v${VERSION}"
+          git diff --staged --quiet || git commit -m "chore: update manifest after publish"
           git push
