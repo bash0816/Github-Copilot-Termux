@@ -39,8 +39,8 @@ store is not available on Termux aarch64.
 ## TUI Support
 
 TUI interactive mode is now available via the bundled native `pty.node`
-(compiled for Android aarch64 bionic). Use the `copilot` command with
-`--prompt-type mode:tui` or any interactive mode flag.
+(compiled for Android aarch64 bionic). Run `copilot` with no arguments to
+start an interactive session, or use `--mode interactive`.
 
 ## Bundled Software
 
