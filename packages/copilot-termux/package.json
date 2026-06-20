@@ -8,7 +8,7 @@
     "copilot-termux": "bin/copilot-termux"
   },
   "scripts": {},
-  "files": ["bin", "lib/platform-patch.js", "lib/setup.js", "lib/bionic-compat.so", "scripts/bionic-compat.c", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
+  "files": ["bin", "lib/platform-patch.js", "lib/setup.js", "lib/bionic-compat.so", "lib/native/pty.node", "scripts/bionic-compat.c", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
   "engines": {
     "node": ">=18"
   },
