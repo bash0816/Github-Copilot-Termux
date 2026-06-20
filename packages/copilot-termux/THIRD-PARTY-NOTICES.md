@@ -60,7 +60,7 @@ Files:
 - Source: https://github.com/microsoft/node-pty
 - Version: 1.1.0
 - License: MIT
-- License text: https://github.com/microsoft/node-pty/blob/main/LICENSE
+- License text: THIRD-PARTY-LICENSES/NODE-PTY-LICENSE.txt
 
 Compiled natively for Android aarch64 (bionic) and bundled as `lib/native/pty.node`.
 Used to provide pseudo-terminal support for the interactive TUI mode of @github/copilot.

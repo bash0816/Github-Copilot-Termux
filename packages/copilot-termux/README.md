@@ -30,11 +30,17 @@ store is not available on Termux aarch64.
 
 ## Known Limitations
 
-- `computer.node` and `pty.node` (TUI interactive features) have no
-  linuxmusl-arm64 variant. TUI mode is not available.
+- `computer.node` (screenshot/computer-use feature) has no linuxmusl-arm64
+  variant and is not available.
 - The bundled glibc Node.js path (`--node-artifact` / `--glibc-dir`) is
   available for staging but does not work on Android due to seccomp blocking
   `set_robust_list` and `rseq` system calls.
+
+## TUI Support
+
+TUI interactive mode is now available via the bundled native `pty.node`
+(compiled for Android aarch64 bionic). Use the `copilot` command with
+`--prompt-type mode:tui` or any interactive mode flag.
 
 ## Bundled Software
 

@@ -26,7 +26,7 @@ const origResolve = Module._resolveFilename.bind(Module);
 Module._resolveFilename = function (request, parent, isMain, options) {
   if (typeof request === 'string' && request.endsWith('.node')) {
     // Redirect pty.node to our bundled Termux-native build.
-    if (request.includes('pty.node') &&
+    if (path.basename(request) === 'pty.node' &&
         (request.includes('linux-arm64') || request.includes('linuxmusl-arm64'))) {
       if (fs.existsSync(NATIVE_PTY)) return NATIVE_PTY;
     }
@@ -37,7 +37,9 @@ Module._resolveFilename = function (request, parent, isMain, options) {
       try {
         const resolved = origResolve(muslReq, parent, isMain, options);
         if (fs.existsSync(resolved)) return resolved;
-      } catch (_) {}
+      } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') throw e;
+      }
       // Block glibc fallback — loading linux-arm64 (glibc) on bionic causes segfault.
       throw new Error(
         `[copilot-termux] Cannot load glibc addon on bionic: ${request}\n` +
