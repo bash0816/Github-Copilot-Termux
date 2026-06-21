@@ -49,3 +49,82 @@ Module._resolveFilename = function (request, parent, isMain, options) {
   }
   return origResolve(request, parent, isMain, options);
 };
+
+// [Android bionic 対応] linuxmusl-arm64/runtime.node は Rust tokio を使う。
+// bionic 上で musl pthread ABI でスレッドを生成すると TUI 起動時に SIGSEGV。
+// runtime.node ロード後に Rust async 初期化関数を no-op に差し替えて阻止する。
+const origLoad = Module._load.bind(Module);
+Module._load = function (request, parent, isMain) {
+  const result = origLoad(request, parent, isMain);
+  if (typeof request === 'string' &&
+      path.basename(request) === 'runtime.node') {
+    // Rust tokio を使う関数群を no-op に差し替え。
+    // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
+    // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
+    // featureFlagService* は同期 Rust のため除外（no-op にすると .handle クラッシュ）。
+    const TOKIO_PATTERN = /^(modelHttp|networkFetch|ahpRelay|websocketResponses|sessionStore|sessionSqlite)/;
+    for (const key of Object.keys(result)) {
+      if (TOKIO_PATTERN.test(key) && typeof result[key] === 'function') {
+        result[key] = () => undefined;
+      }
+    }
+    if (typeof result.networkFetchGetExtraCaPems === 'function') {
+      result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
+    }
+    // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
+    if (typeof result.capiClientListModels === 'function') {
+      result.capiClientListModels = async function(handle, _includeHidden, _skipCache, _applyModelLimitCaps, _networkingConfigId) {
+        let authHeaders;
+        try {
+          const prepared = result.capiClientPrepareRequestHeaders(handle, '', []);
+          authHeaders = {};
+          for (const {name, value} of prepared.headers) {
+            authHeaders[name] = value;
+          }
+        } catch (e) {
+          throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
+        }
+        const baseUrl = 'https://api.githubcopilot.com';
+        let res;
+        try {
+          res = await globalThis.fetch(`${baseUrl}/models`, {method: 'GET', headers: authHeaders});
+        } catch (e) {
+          throw new Error(JSON.stringify({kind: 'network', message: e.message}));
+        }
+        if (!res.ok) {
+          const body = await res.text().catch(() => '');
+          const hdrs = [...res.headers.entries()].map(([name, value]) => ({name, value}));
+          throw new Error(JSON.stringify({kind: 'http', status: res.status, statusText: res.statusText, body, headers: hdrs, hasRequestId: res.headers.has('x-request-id')}));
+        }
+        const data = await res.json();
+        const models = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
+        const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
+        return {modelsJson: JSON.stringify(models), copilotUrl: baseUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
+      };
+    }
+    if (typeof result.sessionSqliteOpen === 'function') {
+      result.sessionSqliteOpen = () => 1;
+    }
+    if (typeof result.sessionSqliteQuery === 'function') {
+      result.sessionSqliteQuery = () => ({ rows: '[]' });
+    }
+    if (typeof result.sessionSqliteRun === 'function') {
+      result.sessionSqliteRun = () => ({ rowsAffected: 0, lastInsertRowid: null });
+    }
+    if (typeof result.sessionSqliteFileExists === 'function') {
+      result.sessionSqliteFileExists = () => false;
+    }
+  }
+  return result;
+};
+
+// [Android bionic 対応] app.js の oPt() が globalThis.fetch を Rust ベースの B7 に
+// 差し替えるのを阻止する。linuxmusl-arm64/runtime.node の Rust ネットワークスタックは
+// bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
+const _nativeFetch = globalThis.fetch;
+Object.defineProperty(globalThis, 'fetch', {
+  configurable: true,
+  enumerable: true,
+  get() { return _nativeFetch; },
+  set(_) { /* B7 代入を無視 */ },
+});

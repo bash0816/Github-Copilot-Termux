@@ -25,6 +25,11 @@ if [ ! -f "${COPILOT_INDEX}" ]; then
   exit 1
 fi
 
+MXC_WRAP="${CACHE_DIR}/mxc-wrap"
+if [ -d "${MXC_WRAP}/arm64" ] && [ -x "${MXC_WRAP}/arm64/lxc-exec" ]; then
+  export MXC_BIN_DIR="${MXC_WRAP}"
+fi
+
 if [ -n "${MAGI_NODE:-}" ]; then
   MAGI_NODE_VERSION="$("${MAGI_NODE}" --version 2>/dev/null || true)"
   MAGI_NODE_MAJOR=""
