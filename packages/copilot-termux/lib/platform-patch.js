@@ -173,7 +173,9 @@ Module._load = function (request, parent, isMain) {
           } else if (blk.type === 'tool_use') {
             contentBlocks.set(e.index, { type: 'tool_use', id: blk.id, name: blk.name, _inputBuf: '' });
           } else if (blk.type === 'thinking') {
-            contentBlocks.set(e.index, { type: 'thinking', thinking: blk.thinking || '' });
+            contentBlocks.set(e.index, { type: 'thinking', thinking: blk.thinking || '', signature: blk.signature || '' });
+          } else if (blk.type === 'redacted_thinking') {
+            contentBlocks.set(e.index, { type: 'redacted_thinking', data: blk.data });
           }
         } else if (e.type === 'content_block_delta') {
           const blk = contentBlocks.get(e.index);
@@ -184,6 +186,8 @@ Module._load = function (request, parent, isMain) {
             blk._inputBuf = (blk._inputBuf || '') + (e.delta.partial_json || '');
           } else if (e.delta.type === 'thinking_delta') {
             blk.thinking = (blk.thinking || '') + (e.delta.thinking || '');
+          } else if (e.delta.type === 'signature_delta') {
+            blk.signature = (blk.signature || '') + (e.delta.signature || '');
           }
         } else if (e.type === 'content_block_stop') {
           const blk = contentBlocks.get(e.index);
