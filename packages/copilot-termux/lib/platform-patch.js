@@ -114,6 +114,91 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.sessionSqliteFileExists === 'function') {
       result.sessionSqliteFileExists = () => false;
     }
+    // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
+    // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
+    // networkFetchStreamStart → { requestId, response: Promise<{handle,url,status,statusText,headers}> }
+    // networkFetchStreamRead   → Promise<{ done, body?: Uint8Array }>
+    // networkFetchStreamClose  → void
+    // networkFetchRequestCancel → void
+    const _nfMap = new Map();
+    let _nfIdSeq = 3e6;
+
+    result.networkFetchStreamStart = function(req) {
+      const requestId = 'nf-' + (++_nfIdSeq);
+      const abortCtrl = new AbortController();
+      const entry = { abort: () => abortCtrl.abort(), reader: null };
+      _nfMap.set(requestId, entry);
+
+      const headers = {};
+      if (Array.isArray(req.headers)) {
+        for (const { name, value } of req.headers) headers[name] = value;
+      } else if (req.headers && typeof req.headers === 'object') {
+        Object.assign(headers, req.headers);
+      }
+
+      const response = (async () => {
+        let res;
+        try {
+          res = await globalThis.fetch(req.url, {
+            method: req.method || 'GET',
+            headers,
+            body: req.body ?? undefined,
+            signal: abortCtrl.signal,
+            redirect: req.redirect || 'follow',
+          });
+        } catch (e) {
+          _nfMap.delete(requestId);
+          throw e;
+        }
+        const handle = requestId;
+        const reader = res.body ? res.body.getReader() : null;
+        entry.reader = reader;
+        const respHeaders = [...res.headers.entries()].map(([name, value]) => ({ name, value }));
+        return { handle, url: res.url, status: res.status, statusText: res.statusText, headers: respHeaders };
+      })();
+
+      return { requestId, response };
+    };
+
+    result.networkFetchStreamRead = function(handle) {
+      return (async () => {
+        const entry = _nfMap.get(handle);
+        if (!entry || !entry.reader) return { done: true };
+        try {
+          const { done, value } = await entry.reader.read();
+          if (done) { _nfMap.delete(handle); return { done: true }; }
+          return { done: false, body: value };
+        } catch (e) {
+          _nfMap.delete(handle);
+          throw e;
+        }
+      })();
+    };
+
+    result.networkFetchStreamClose = function(handle) {
+      const entry = _nfMap.get(handle);
+      if (entry) {
+        try { entry.reader?.cancel(); } catch (_) {}
+        try { entry.abort(); } catch (_) {}
+        _nfMap.delete(handle);
+      }
+    };
+
+    result.networkFetchRequestCancel = function(requestId) {
+      const entry = _nfMap.get(requestId);
+      if (entry) {
+        try { entry.abort(); } catch (_) {}
+        _nfMap.delete(requestId);
+      }
+    };
+
+    result.networkFetchResetClients = function() {
+      for (const entry of _nfMap.values()) {
+        try { entry.abort(); } catch (_) {}
+      }
+      _nfMap.clear();
+    };
+    // --- end JS networkFetch* implementation ---
     // --- JS model HTTP implementation (bionic: tokio modelHttp* are no-op'd) ---
     // Stream store: streamId → {events, index, finalMessage}
     const _jsStreams = new Map();
@@ -333,16 +418,21 @@ Module._load = function (request, parent, isMain) {
         throw new Error(`Native mod HTTP stream was not found: ${streamId}`);
       }
       _jsStreams.delete(streamId);
+      let copilotUsage = null;
       for (const event of st.events) {
-        const eventJson = JSON.stringify(event);
-        if (_nativeReducerProcessEvent) {
-          try { _nativeReducerProcessEvent(reducerId, eventJson); } catch (_) {}
-        }
-        if (hasProcessors && typeof onChunkCallback === 'function') {
-          try { onChunkCallback(eventJson); } catch (_) {}
+        if (!_nativeReducerProcessEvent) continue;
+        let parsed;
+        try { parsed = JSON.parse(_nativeReducerProcessEvent(reducerId, JSON.stringify(event)).json); }
+        catch (_) { continue; }
+        if (parsed && parsed.copilotUsage !== undefined && parsed.copilotUsage !== null)
+          copilotUsage = parsed.copilotUsage;
+        const cc = parsed && parsed.chunkContext;
+        if (hasProcessors && typeof onChunkCallback === 'function' && cc &&
+            (cc.content || cc.messageStart || cc.reportIntentArguments || cc.chunkBoundary || cc.size > 0)) {
+          try { onChunkCallback(JSON.stringify(cc)); } catch (_) {}
         }
       }
-      return { json: JSON.stringify({ kind: 'ok', copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
+      return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
     };
     // --- end JS model HTTP implementation ---
   }
