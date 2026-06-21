@@ -28,16 +28,12 @@ jobs:
           else
             echo "No new version"
           fi
-      - name: Trigger build for new version
+      - name: Report new version
         if: steps.check_version.outputs.new_version != ''
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
           NODE_GLIBC_TAG=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.nodejs_glibc_version || 'node-glibc-v24.15.0')")
-          echo "Triggering build for @github/copilot@${NEW_VERSION} with ${NODE_GLIBC_TAG}"
-          gh workflow run build-copilot-termux.yml \
-            --ref "${{ github.ref_name }}" \
-            --field "copilot_version=${NEW_VERSION}" \
-            --field "node_glibc_tag=${NODE_GLIBC_TAG}"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          echo "New @github/copilot version detected: ${NEW_VERSION}"
+          echo "node_glibc_tag: ${NODE_GLIBC_TAG}"
+          echo "Build workflow has been removed in thin wrapper mode; handle publish/promotion manually."
