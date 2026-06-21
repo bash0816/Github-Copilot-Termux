@@ -7,6 +7,9 @@ while [ -L "${SELF}" ]; do
   case "${SELF}" in /*) ;; *) SELF="${DIR}/${SELF}" ;; esac
 done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
+_COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
+[ -f "${_COMPAT}" ] || { echo '[copilot-termux] ERROR: lib/bionic-compat.so missing. Reinstall package.' >&2; exit 1; }
+PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 CACHE_DIR="${HOME}/.copilot-termux"
 CURRENT="${CACHE_DIR}/current"
@@ -22,6 +25,11 @@ if [ ! -f "${COPILOT_INDEX}" ]; then
   exit 1
 fi
 
+MXC_WRAP="${CACHE_DIR}/mxc-wrap"
+if [ -d "${MXC_WRAP}/arm64" ] && [ -x "${MXC_WRAP}/arm64/lxc-exec" ]; then
+  export MXC_BIN_DIR="${MXC_WRAP}"
+fi
+
 if [ -n "${MAGI_NODE:-}" ]; then
   MAGI_NODE_VERSION="$("${MAGI_NODE}" --version 2>/dev/null || true)"
   MAGI_NODE_MAJOR=""
@@ -33,7 +41,7 @@ if [ -n "${MAGI_NODE:-}" ]; then
   case "${MAGI_NODE_MAJOR}" in
     ''|*[!0-9]*)
       echo "[copilot-termux] MAGI_NODE version check failed; falling back to node" >&2
-      exec node \
+      LD_PRELOAD="${PRELOAD}" exec node \
         --require "${PACKAGE_DIR}/lib/platform-patch.js" \
         "${COPILOT_INDEX}" \
         "$@"
@@ -42,28 +50,21 @@ if [ -n "${MAGI_NODE:-}" ]; then
 
   if [ "${MAGI_NODE_MAJOR}" -lt 24 ]; then
     echo "[copilot-termux] MAGI_NODE ${MAGI_NODE_VERSION} is below v24; falling back to node" >&2
-    exec node \
+    LD_PRELOAD="${PRELOAD}" exec node \
       --require "${PACKAGE_DIR}/lib/platform-patch.js" \
       "${COPILOT_INDEX}" \
       "$@"
   fi
 
-  _COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
-  if [ -f "${_COMPAT}" ]; then
-    exec env -u LD_LIBRARY_PATH \
-      LD_PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}" \
-      "${MAGI_NODE}" \
-      --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-      "${COPILOT_INDEX}" \
-      "$@"
-  fi
-  exec env -u LD_LIBRARY_PATH "${MAGI_NODE}" \
+  exec env -u LD_LIBRARY_PATH \
+    LD_PRELOAD="${PRELOAD}" \
+    "${MAGI_NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
     "${COPILOT_INDEX}" \
     "$@"
 fi
 
-exec node \
+LD_PRELOAD="${PRELOAD}" exec node \
   --require "${PACKAGE_DIR}/lib/platform-patch.js" \
   "${COPILOT_INDEX}" \
   "$@"

@@ -96,7 +96,48 @@ async function setup() {
   try { fs.unlinkSync(tmp); } catch (_) {}
   fs.symlinkSync(versionDir, tmp);
   fs.renameSync(tmp, currentLink);
+
+  await setupGlibcWrap();
   console.log(`✓ copilot ${version} ready`);
+}
+
+async function setupGlibcWrap() {
+  const PREFIX = process.env.PREFIX || '/data/data/com.termux/files/usr';
+  const glibcDir = path.join(PREFIX, 'glibc', 'lib');
+  const LD = path.join(glibcDir, 'ld-linux-aarch64.so.1');
+  if (!fs.existsSync(LD)) {
+    throw new Error(`[copilot-termux] glibc not found at ${glibcDir}. Please install glibc-repo: pkg install glibc-repo && pkg install glibc`);
+  }
+
+  const wrapLibsDir = path.join(CACHE_DIR, 'glibc-wrap-libs');
+  const mxcWrapDir = path.join(CACHE_DIR, 'mxc-wrap', 'arm64');
+
+  fs.rmSync(wrapLibsDir, { recursive: true, force: true });
+  fs.mkdirSync(wrapLibsDir, { recursive: true });
+  fs.mkdirSync(mxcWrapDir, { recursive: true });
+
+  for (const lib of ['ld-linux-aarch64.so.1', 'libc.so.6', 'libgcc_s.so.1']) {
+    const src = path.join(glibcDir, lib);
+    if (!fs.existsSync(src)) throw new Error(`[copilot-termux] Missing glibc lib: ${src}`);
+    fs.copyFileSync(src, path.join(wrapLibsDir, lib));
+  }
+
+  const libcSo = path.join(wrapLibsDir, 'libc.so');
+  try { fs.unlinkSync(libcSo); } catch (_) {}
+  fs.symlinkSync('libc.so.6', libcSo);
+
+  const wrapperPath = path.join(mxcWrapDir, 'lxc-exec');
+  const wrapperContent = [
+    '#!/bin/sh',
+    '_CACHE="${HOME}/.copilot-termux"',
+    '_LIBS="${_CACHE}/glibc-wrap-libs"',
+    '_LD="${_LIBS}/ld-linux-aarch64.so.1"',
+    '_LXC="${_CACHE}/current/mxc-bin/arm64/lxc-exec"',
+    'exec env -u LD_PRELOAD "$_LD" --library-path "$_LIBS" "$_LXC" "$@"',
+  ].join('\n') + '\n';
+  fs.writeFileSync(wrapperPath, wrapperContent, { mode: 0o755 });
+
+  console.log('✓ glibc wrap for lxc-exec ready');
 }
 
 module.exports = { setup };
