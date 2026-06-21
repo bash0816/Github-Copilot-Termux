@@ -321,6 +321,29 @@ Module._load = function (request, parent, isMain) {
       const bodyText = await res.text().catch(() => '');
       return { json: JSON.stringify({ bodyText, status: res.status, statusText: res.statusText, headers }) };
     };
+    // 8. responsesStreamDrive → JS streamをネイティブリデューサーに流す
+    // native responsesStreamDrive は Rust tokio でストリームを読む。
+    // JS streamId（"js-"で始まる）はRust側にないためクラッシュ → JS実装で代替。
+    const _nativeReducerProcessEvent = typeof result.openaiResponsesStreamReducerProcessEvent === 'function'
+      ? result.openaiResponsesStreamReducerProcessEvent
+      : null;
+    result.responsesStreamDrive = async function(streamId, reducerId, hasProcessors, onChunkCallback) {
+      const st = _jsStreams.get(streamId);
+      if (!st) {
+        throw new Error(`Native mod HTTP stream was not found: ${streamId}`);
+      }
+      _jsStreams.delete(streamId);
+      for (const event of st.events) {
+        const eventJson = JSON.stringify(event);
+        if (_nativeReducerProcessEvent) {
+          try { _nativeReducerProcessEvent(reducerId, eventJson); } catch (_) {}
+        }
+        if (hasProcessors && typeof onChunkCallback === 'function') {
+          try { onChunkCallback(eventJson); } catch (_) {}
+        }
+      }
+      return { json: JSON.stringify({ kind: 'ok', copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
+    };
     // --- end JS model HTTP implementation ---
   }
   return result;
