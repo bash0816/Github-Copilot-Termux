@@ -9,6 +9,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       actions: write
     steps:
       - uses: actions/checkout@v4
@@ -28,12 +29,59 @@ jobs:
           else
             echo "No new version"
           fi
-      - name: Report new version
+      - name: Update manifest and package.json
         if: steps.check_version.outputs.new_version != ''
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
-          NODE_GLIBC_TAG=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.nodejs_glibc_version || 'node-glibc-v24.15.0')")
-          echo "New @github/copilot version detected: ${NEW_VERSION}"
-          echo "node_glibc_tag: ${NODE_GLIBC_TAG}"
-          echo "Build workflow has been removed in thin wrapper mode; handle publish/promotion manually."
+
+          # Update manifest
+          MANIFEST="config/copilot-termux-release-manifest.json"
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
+            m.copilot_version = '$NEW_VERSION';
+            m.last_updated = new Date().toISOString().slice(0,10);
+            m.candidate_state = 'none';
+            m.canonical_package_status = 'not_published';
+            m.latest_candidate_version = null;
+            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+          "
+
+          # Update package.json version
+          PKG="packages/copilot-termux/package.json"
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('$PKG', 'utf8'));
+            p.version = '$NEW_VERSION';
+            fs.writeFileSync('$PKG', JSON.stringify(p, null, 2) + '\n');
+          "
+
+          echo "Updated manifest and package.json to version: $NEW_VERSION"
+      - name: Commit and push changes
+        if: steps.check_version.outputs.new_version != ''
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add config/copilot-termux-release-manifest.json packages/copilot-termux/package.json
+          git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
+
+          git push
+      - name: Dispatch npm-package verify
+        if: steps.check_version.outputs.new_version != ''
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+
+          gh workflow run npm-package.yml \
+            --repo bash0816/Github-Copilot-Termux \
+            --field publish=false \
+            --field npm_tag=candidate
+
+          echo "Dispatched npm-package.yml verify (publish=false, npm_tag=candidate) for version ${NEW_VERSION}"
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PRIVATE_ARTIFACT_TOKEN }}
