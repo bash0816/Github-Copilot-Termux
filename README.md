@@ -72,7 +72,7 @@ copilot-termux setup
 
 ## Known Issues / 既知の問題
 
-なし（Device A 検証済み / Device B 検証待ち）
+なし（Device A・Device B 検証済み）
 
 ## Do Not Use / 非推奨
 
