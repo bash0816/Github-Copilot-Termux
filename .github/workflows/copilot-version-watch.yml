@@ -42,6 +42,9 @@ jobs:
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
             m.copilot_version = '$NEW_VERSION';
             m.last_updated = new Date().toISOString().slice(0,10);
+            m.candidate_state = 'none';
+            m.canonical_package_status = 'not_published';
+            m.latest_candidate_version = null;
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
 
