@@ -114,6 +114,327 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.sessionSqliteFileExists === 'function') {
       result.sessionSqliteFileExists = () => false;
     }
+    // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
+    // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
+    // networkFetchStreamStart → { requestId, response: Promise<{handle,url,status,statusText,headers}> }
+    // networkFetchStreamRead   → Promise<{ done, body?: Uint8Array }>
+    // networkFetchStreamClose  → void
+    // networkFetchRequestCancel → void
+    const _nfMap = new Map();
+    let _nfIdSeq = 3e6;
+
+    result.networkFetchStreamStart = function(req) {
+      const requestId = 'nf-' + (++_nfIdSeq);
+      const abortCtrl = new AbortController();
+      const entry = { abort: () => abortCtrl.abort(), reader: null };
+      _nfMap.set(requestId, entry);
+
+      const headers = {};
+      if (Array.isArray(req.headers)) {
+        for (const { name, value } of req.headers) headers[name] = value;
+      } else if (req.headers && typeof req.headers === 'object') {
+        Object.assign(headers, req.headers);
+      }
+
+      const response = (async () => {
+        let res;
+        try {
+          res = await globalThis.fetch(req.url, {
+            method: req.method || 'GET',
+            headers,
+            body: req.body ?? undefined,
+            signal: abortCtrl.signal,
+            redirect: req.redirect || 'follow',
+          });
+        } catch (e) {
+          _nfMap.delete(requestId);
+          throw e;
+        }
+        const handle = requestId;
+        const reader = res.body ? res.body.getReader() : null;
+        entry.reader = reader;
+        const respHeaders = [...res.headers.entries()].map(([name, value]) => ({ name, value }));
+        return { handle, url: res.url, status: res.status, statusText: res.statusText, headers: respHeaders };
+      })();
+
+      return { requestId, response };
+    };
+
+    result.networkFetchStreamRead = function(handle) {
+      return (async () => {
+        const entry = _nfMap.get(handle);
+        if (!entry || !entry.reader) return { done: true };
+        try {
+          const { done, value } = await entry.reader.read();
+          if (done) { _nfMap.delete(handle); return { done: true }; }
+          return { done: false, body: value };
+        } catch (e) {
+          _nfMap.delete(handle);
+          throw e;
+        }
+      })();
+    };
+
+    result.networkFetchStreamClose = function(handle) {
+      const entry = _nfMap.get(handle);
+      if (entry) {
+        try { entry.reader?.cancel(); } catch (_) {}
+        try { entry.abort(); } catch (_) {}
+        _nfMap.delete(handle);
+      }
+    };
+
+    result.networkFetchRequestCancel = function(requestId) {
+      const entry = _nfMap.get(requestId);
+      if (entry) {
+        try { entry.abort(); } catch (_) {}
+        _nfMap.delete(requestId);
+      }
+    };
+
+    result.networkFetchResetClients = function() {
+      for (const entry of _nfMap.values()) {
+        try { entry.abort(); } catch (_) {}
+      }
+      _nfMap.clear();
+    };
+    // --- end JS networkFetch* implementation ---
+    // --- JS model HTTP implementation (bionic: tokio modelHttp* are no-op'd) ---
+    // Stream store: streamId → {events, index, finalMessage}
+    const _jsStreams = new Map();
+    let _accIdSeq = 1e6;
+    // Accumulator store: accId → {message}
+    const _jsAccs = new Map();
+
+    // Helper: parse Anthropic SSE body into events array
+    function _parseAnthropicSSE(bodyText) {
+      const events = [];
+      const lines = bodyText.split(/\r\n|\r|\n/);
+      let dataLines = [];
+      for (const line of lines) {
+        if (line === '' || line === '\r') {
+          if (dataLines.length > 0) {
+            const dataStr = dataLines.join('\n');
+            dataLines = [];
+            if (dataStr.trim() === '[DONE]') continue;
+            try { events.push(JSON.parse(dataStr)); } catch(_) {}
+          }
+        } else if (line.startsWith('data: ')) {
+          dataLines.push(line.slice(6));
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5));
+        }
+      }
+      if (dataLines.length > 0) {
+        const dataStr = dataLines.join('\n');
+        if (dataStr.trim() !== '[DONE]') {
+          try { events.push(JSON.parse(dataStr)); } catch(_) {}
+        }
+      }
+      return events;
+    }
+
+    // Helper: reconstruct final Anthropic message from SSE events
+    function _reconstructFinalMessage(events) {
+      let message = null;
+      const contentBlocks = new Map(); // index → block
+      for (const e of events) {
+        if (e.type === 'message_start') {
+          message = {
+            id: e.message && e.message.id,
+            type: (e.message && e.message.type) || 'message',
+            role: (e.message && e.message.role) || 'assistant',
+            model: e.message && e.message.model,
+            stop_reason: (e.message && e.message.stop_reason) || null,
+            stop_sequence: (e.message && e.message.stop_sequence) || null,
+            usage: (e.message && e.message.usage) || { input_tokens: 0, output_tokens: 0 },
+            content: []
+          };
+        } else if (e.type === 'content_block_start') {
+          const blk = e.content_block;
+          if (!blk) continue;
+          if (blk.type === 'text') {
+            contentBlocks.set(e.index, { type: 'text', text: blk.text || '' });
+          } else if (blk.type === 'tool_use') {
+            contentBlocks.set(e.index, { type: 'tool_use', id: blk.id, name: blk.name, _inputBuf: '' });
+          } else if (blk.type === 'thinking') {
+            contentBlocks.set(e.index, { type: 'thinking', thinking: blk.thinking || '', signature: blk.signature || '' });
+          } else if (blk.type === 'redacted_thinking') {
+            contentBlocks.set(e.index, { type: 'redacted_thinking', data: blk.data });
+          }
+        } else if (e.type === 'content_block_delta') {
+          const blk = contentBlocks.get(e.index);
+          if (!blk || !e.delta) continue;
+          if (e.delta.type === 'text_delta') {
+            blk.text = (blk.text || '') + (e.delta.text || '');
+          } else if (e.delta.type === 'input_json_delta') {
+            blk._inputBuf = (blk._inputBuf || '') + (e.delta.partial_json || '');
+          } else if (e.delta.type === 'thinking_delta') {
+            blk.thinking = (blk.thinking || '') + (e.delta.thinking || '');
+          } else if (e.delta.type === 'signature_delta') {
+            blk.signature = (blk.signature || '') + (e.delta.signature || '');
+          }
+        } else if (e.type === 'content_block_stop') {
+          const blk = contentBlocks.get(e.index);
+          if (blk && blk.type === 'tool_use') {
+            try { blk.input = JSON.parse(blk._inputBuf || '{}'); } catch(_) { blk.input = {}; }
+            delete blk._inputBuf;
+          }
+        } else if (e.type === 'message_delta') {
+          if (message) {
+            if (e.delta && e.delta.stop_reason != null) message.stop_reason = e.delta.stop_reason;
+            if (e.delta && e.delta.stop_sequence != null) message.stop_sequence = e.delta.stop_sequence;
+            if (e.usage && e.usage.output_tokens != null && message.usage) {
+              message.usage.output_tokens = e.usage.output_tokens;
+            }
+          }
+        }
+      }
+      if (message) {
+        const blocks = Array.from(contentBlocks.entries())
+          .sort(([a], [b]) => a - b)
+          .map(([, v]) => v);
+        message.content = blocks;
+      }
+      if (!message) {
+        message = { role: 'assistant', content: [], stop_reason: 'error', stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } };
+      }
+      return message;
+    }
+
+    // 1. anthropicMessageStreamAccumulatorCreate → JS mock
+    if (typeof result.anthropicMessageStreamAccumulatorCreate === 'function') {
+      result.anthropicMessageStreamAccumulatorCreate = function(_handleJson) {
+        const id = _accIdSeq++;
+        _jsAccs.set(id, { message: null });
+        return { json: JSON.stringify({ accumulatorId: id }) };
+      };
+    }
+
+    // 2. anthropicMessageStreamAccumulatorFinish → return accumulated message
+    if (typeof result.anthropicMessageStreamAccumulatorFinish === 'function') {
+      result.anthropicMessageStreamAccumulatorFinish = function(id) {
+        const acc = _jsAccs.get(id) || { message: null };
+        _jsAccs.delete(id);
+        return { json: JSON.stringify({ message: acc.message }) };
+      };
+    }
+
+    // 3. anthropicMessageStreamAccumulatorDrop → cleanup
+    if (typeof result.anthropicMessageStreamAccumulatorDrop === 'function') {
+      result.anthropicMessageStreamAccumulatorDrop = function(id) {
+        _jsAccs.delete(id);
+      };
+    }
+
+    // 4. modelHttpStreamStart → fetch full SSE body, parse events
+    result.modelHttpStreamStart = async function(jsonArg) {
+      const req = JSON.parse(jsonArg);
+      let body = req.body;
+      if (body !== null && body !== undefined && typeof body === 'object') {
+        if (body.type === 'Buffer' && Array.isArray(body.data)) {
+          body = Buffer.from(body.data);
+        } else {
+          body = JSON.stringify(body);
+        }
+      }
+      let res;
+      try {
+        res = await globalThis.fetch(req.url, {
+          method: req.method || 'POST',
+          headers: req.headers || {},
+          body: body,
+        });
+      } catch(e) {
+        throw new Error(JSON.stringify({ kind: 'network', message: e.message }));
+      }
+      const headers = {};
+      for (const [k, v] of res.headers.entries()) headers[k] = v;
+      const bodyText = await res.text().catch(() => '');
+      if (res.status < 200 || res.status >= 300) {
+        return { json: JSON.stringify({ bodyText, status: res.status, statusText: res.statusText, headers, streamId: null }) };
+      }
+      const events = _parseAnthropicSSE(bodyText);
+      const finalMessage = _reconstructFinalMessage(events);
+      const streamId = 'js-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+      _jsStreams.set(streamId, { events, index: 0, finalMessage });
+      return { json: JSON.stringify({ bodyText: null, status: res.status, statusText: res.statusText, headers, streamId }) };
+    };
+
+    // 5. modelHttpStreamNextAnthropicMessageEvent → yield events one by one
+    result.modelHttpStreamNextAnthropicMessageEvent = async function(streamId, accId) {
+      const st = _jsStreams.get(streamId);
+      if (!st || st.index >= st.events.length) {
+        if (st) {
+          const acc = _jsAccs.get(accId);
+          if (acc) acc.message = st.finalMessage;
+          _jsStreams.delete(streamId);
+        }
+        return null;
+      }
+      return { json: JSON.stringify({ kind: 'ok', processResult: { event: st.events[st.index++] } }) };
+    };
+
+    // 6. modelHttpStreamCancel → cleanup
+    result.modelHttpStreamCancel = function(streamId) {
+      _jsStreams.delete(streamId);
+    };
+
+    // 7. modelHttpRequest → non-streaming fetch
+    result.modelHttpRequest = async function(jsonArg) {
+      const req = JSON.parse(jsonArg);
+      let body = req.body;
+      if (body !== null && body !== undefined && typeof body === 'object') {
+        if (body.type === 'Buffer' && Array.isArray(body.data)) {
+          body = Buffer.from(body.data);
+        } else {
+          body = JSON.stringify(body);
+        }
+      }
+      let res;
+      try {
+        res = await globalThis.fetch(req.url, {
+          method: req.method || 'POST',
+          headers: req.headers || {},
+          body: body,
+        });
+      } catch(e) {
+        throw new Error(JSON.stringify({ kind: 'network', message: e.message }));
+      }
+      const headers = {};
+      for (const [k, v] of res.headers.entries()) headers[k] = v;
+      const bodyText = await res.text().catch(() => '');
+      return { json: JSON.stringify({ bodyText, status: res.status, statusText: res.statusText, headers }) };
+    };
+    // 8. responsesStreamDrive → JS streamをネイティブリデューサーに流す
+    // native responsesStreamDrive は Rust tokio でストリームを読む。
+    // JS streamId（"js-"で始まる）はRust側にないためクラッシュ → JS実装で代替。
+    const _nativeReducerProcessEvent = typeof result.openaiResponsesStreamReducerProcessEvent === 'function'
+      ? result.openaiResponsesStreamReducerProcessEvent
+      : null;
+    result.responsesStreamDrive = async function(streamId, reducerId, hasProcessors, onChunkCallback) {
+      const st = _jsStreams.get(streamId);
+      if (!st) {
+        throw new Error(`Native mod HTTP stream was not found: ${streamId}`);
+      }
+      _jsStreams.delete(streamId);
+      let copilotUsage = null;
+      for (const event of st.events) {
+        if (!_nativeReducerProcessEvent) continue;
+        let parsed;
+        try { parsed = JSON.parse(_nativeReducerProcessEvent(reducerId, JSON.stringify(event)).json); }
+        catch (_) { continue; }
+        if (parsed && parsed.copilotUsage !== undefined && parsed.copilotUsage !== null)
+          copilotUsage = parsed.copilotUsage;
+        const cc = parsed && parsed.chunkContext;
+        if (hasProcessors && typeof onChunkCallback === 'function' && cc &&
+            (cc.content || cc.messageStart || cc.reportIntentArguments || cc.chunkBoundary || cc.size > 0)) {
+          try { onChunkCallback(JSON.stringify(cc)); } catch (_) {}
+        }
+      }
+      return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
+    };
+    // --- end JS model HTTP implementation ---
   }
   return result;
 };
