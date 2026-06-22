@@ -1,48 +1,76 @@
 # @bash0816/copilot-termux
 
-GitHub Copilot CLI wrapper for Termux (Android aarch64).
+GitHub Copilot CLI for Termux (Android aarch64).
 
-## Requirements
+Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
-- Android aarch64 (Termux)
-- Termux bionic Node.js v24+ (`pkg install nodejs`)
-- Termux clang (`pkg install clang`) — required to run `stage-copilot.sh`
+## Status / 状態
 
-## Setup
+- version: `1.0.63`
+- `copilot -p`: **available** ✅
+- TUI (`copilot`): **available** ✅
+- MCP: **available** ✅
 
-Run the staging script to download @github/copilot and compile the bionic
-compatibility layer:
-
-```sh
-./scripts/stage-copilot.sh --copilot-version 1.0.63
-```
-
-Then launch with:
+## Install / インストール
 
 ```sh
-MAGI_NODE=$(which node) copilot --help
+npm install -g @bash0816/copilot-termux
+copilot-termux setup
+copilot --version
 ```
 
-## Authentication
+## First-time Setup / 初回セットアップ
 
-Use the `GITHUB_TOKEN` environment variable. The `keytar.node` credential
-store is not available on Termux aarch64.
+```sh
+# 1. Install
+npm install -g @bash0816/copilot-termux
 
-## Known Limitations
+# 2. Download @github/copilot CLI
+copilot-termux setup
 
-- `computer.node` (screenshot/computer-use feature) has no linuxmusl-arm64
-  variant and is not available.
-- The bundled glibc Node.js path (`--node-artifact` / `--glibc-dir`) is
-  available for staging but does not work on Android due to seccomp blocking
-  `set_robust_list` and `rseq` system calls.
+# 3. Authenticate
+copilot auth login
 
-## TUI Support
+# 4. Verify
+copilot --version
+```
 
-TUI interactive mode is now available via the bundled native `pty.node`
-(compiled for Android aarch64 bionic). Run `copilot` with no arguments to
-start an interactive session, or use `--mode interactive`.
+## Usage / 使い方
 
-## Bundled Software
+```sh
+# Non-interactive prompt / 非対話プロンプト
+copilot -p "write a hello world script"
 
-This package includes @github/copilot distributed in unmodified form under
-the GitHub Copilot CLI License (lib/copilot/LICENSE.md).
+# Interactive TUI / 対話型 TUI
+copilot
+```
+
+## Update / 更新
+
+```sh
+npm install -g @bash0816/copilot-termux@latest --force
+copilot-termux setup
+```
+
+## Requirements / 必要環境
+
+- Termux (Android aarch64)
+- Node.js 18+（`pkg install nodejs`）
+- glibc（`pkg install glibc-repo && pkg install glibc`）
+
+## How It Works / 仕組み
+
+`@bash0816/copilot-termux` は `@github/copilot` CLI の Termux 向けラッパーです。
+
+- **bionic-compat.so**: Termux bionic 上で動作しない glibc 依存シンボルをスタブ
+- **platform-patch.js**: Rust ネイティブモジュールの Android 非対応 API を Node.js で代替
+  - `networkFetch*`: MCP SSE transport 用 HTTP ストリーム実装
+  - `responsesStreamDrive`: AI レスポンスストリーム処理
+  - `modelHttp*`: AI モデル HTTP 呼び出し
+- **pty.node**: Termux bionic ネイティブビルドの PTY モジュール
+
+## License / ライセンス
+
+- Wrapper code: GPL-3.0-only
+- `@github/copilot` CLI: [GitHub Copilot CLI License](https://github.com/github/copilot-cli/blob/main/LICENSE.md)
+- PTY module (`pty.node`): MIT
