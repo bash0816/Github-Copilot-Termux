@@ -1,12 +1,12 @@
 {
   "package_name": "@bash0816/copilot-termux",
   "latest_audited_version": "1.0.63",
-  "latest_candidate_version": "1.0.63",
-  "candidate_state": "published",
-  "canonical_package_status": "published",
+  "latest_candidate_version": null,
+  "candidate_state": "none",
+  "canonical_package_status": "not_published",
   "public_distribution_status": "published",
   "nodejs_glibc_version": "node-glibc-v24.15.0",
-  "copilot_version": "1.0.63",
+  "copilot_version": "1.0.64",
   "build_run_id": null,
-  "last_updated": "2026-06-22"
+  "last_updated": "2026-06-24"
 }
