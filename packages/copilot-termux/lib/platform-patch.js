@@ -68,6 +68,35 @@ Module._load = function (request, parent, isMain) {
         result[key] = () => undefined;
       }
     }
+    // git*Async: Rust tokio async functions — type-safe stubs to prevent SIGSEGV.
+    // Returns empty/null values matching what app.js callers expect.
+    const GIT_ASYNC_STUBS = {
+      gitMutateAsync:             async () => undefined,
+      gitCommandAsync:            async () => '',
+      gitRemotesAsync:            async () => [],
+      gitDiffFileAsync:           async () => '',
+      gitHashFileAsync:           async () => [],
+      gitMergeBaseAsync:          async () => null,
+      gitDiffForRefAsync:         async () => '',
+      gitCurrentBranchAsync:      async () => null,
+      gitDefaultBranchAsync:      async () => null,
+      gitListWorktreesAsync:      async () => [],
+      gitBranchAndHeadAsync:      async () => null,
+      gitSubmodulePathsAsync:     async () => [],
+      gitUntrackedPathsAsync:     async () => [],
+      gitDiffNameStatusAsync:     async () => '',
+      gitStatusPorcelainAsync:    async () => '',
+      gitWorkingTreeStatusAsync:  async () => ({ hasUnstagedChanges: false, hasStagedChanges: false, hasUntrackedFiles: false }),
+      gitStatusPorcelainAllAsync: async () => null,
+      gitCurrentBranchRemoteAsync: async () => null,
+      gitWorkingTreeDiffStatsAsync: async () => ({ linesAdded: 0, linesRemoved: 0 }),
+    };
+    for (const [key, stub] of Object.entries(GIT_ASYNC_STUBS)) {
+      if (typeof result[key] === 'function') result[key] = stub;
+    }
+    if (typeof result.registerLogSink === 'function') {
+      result.registerLogSink = () => { throw new Error('[copilot-termux] registerLogSink disabled on bionic (no tokio thread)'); };
+    }
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
@@ -434,6 +463,113 @@ Module._load = function (request, parent, isMain) {
       }
       return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
     };
+    // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
+    const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost }
+
+    result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
+      _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null });
+      // native 非呼び出し: tokio runtime 生成を阻止
+    };
+
+    async function _buildAuthInfo(token, hostUri) {
+      let login = null;
+      try {
+        const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
+        const res = await globalThis.fetch(`${apiHost}/user`, {
+          headers: { Authorization: `token ${token}`, 'User-Agent': 'copilot-termux/1.0.64' },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) login = (await res.json()).login;
+      } catch (_) {}
+      return JSON.stringify({
+        authInfo: { type: 'token', host: hostUri, token, login, copilotUser: null },
+        token,
+      });
+    }
+
+    async function _resolveOrCache(uuid, token, env) {
+      const entry = _authMgr.get(uuid);
+      if (!entry) return null;
+      const hostUri = result.githubGetUri(
+        (env && env.COPILOT_GH_HOST) || undefined,
+        (env && env.GH_HOST) || undefined
+      ) || 'https://github.com';
+      if (entry.cachedInfo !== null && (entry.cachedToken !== token || entry.cachedHost !== hostUri)) {
+        entry.cachedInfo = null;
+        entry.pendingInfo = null;
+      }
+      if (entry.cachedInfo !== null) return entry.cachedInfo;
+      if (!entry.pendingInfo) {
+        entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+          entry.cachedInfo = info;
+          entry.cachedToken = token;
+          entry.cachedHost = hostUri;
+          entry.pendingInfo = null;
+          return info;
+        });
+      }
+      return entry.pendingInfo;
+    }
+
+    result.authManagerLoadAuthInfo = async function(uuid, env, token) {
+      if (!token) return null;
+      return _resolveOrCache(uuid, token, env);
+    };
+    result.authManagerGetCurrentAuthInfo = async function(uuid, env, token) {
+      if (!token) return null;
+      return _resolveOrCache(uuid, token, env);
+    };
+    result.authManagerGetAllAuthAvailable = async function(uuid, env, token) {
+      if (!token) return [];
+      const info = await _resolveOrCache(uuid, token, env);
+      return info ? [info] : [];
+    };
+    result.authManagerGetLastAuthErrors = function(uuid) { return []; };
+    result.authManagerClearCache = function(uuid) {
+      const e = _authMgr.get(uuid);
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
+    };
+    result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
+      const entry = _authMgr.get(uuid);
+      if (entry && authInfoJson) {
+        try {
+          const authInfo = JSON.parse(authInfoJson);
+          const hostUri = (authInfo && authInfo.host) || 'https://github.com';
+          entry.cachedInfo = JSON.stringify({ authInfo, token: token || null });
+          entry.cachedToken = token || null;
+          entry.cachedHost = hostUri;
+          entry.pendingInfo = null;
+        } catch (_) {}
+      }
+    };
+    result.authManagerLoginUser = async function(uuid, host, deviceCode, clientSecret) {
+      return null; // 既知制限: デバイスフロー非対応
+    };
+    result.authManagerLogout = async function(uuid, authInfoJson) {
+      const e = _authMgr.get(uuid);
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
+      return true;
+    };
+    result.authManagerRefreshCopilotUser = async function(uuid) {
+      return null; // null → JS側 authInfoWithTokenPromise フォールバック
+    };
+    result.authManagerDestroy = function(uuid) { _authMgr.delete(uuid); };
+
+    result.authResolveAuthInfoFromToken = async function(token, hostUri, skipCache, userAgent) {
+      if (!token) return JSON.stringify(null);
+      let login = null;
+      try {
+        const apiHost = (hostUri || 'https://github.com').replace('://github.com', '://api.github.com');
+        const res = await globalThis.fetch(`${apiHost}/user`, {
+          headers: { Authorization: `token ${token}`, 'User-Agent': userAgent || 'copilot-termux/1.0.64' },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) login = (await res.json()).login;
+      } catch (_) {}
+      const host = hostUri || 'https://github.com';
+      return JSON.stringify({ type: 'token', host, token, login, copilotUser: null });
+    };
+    // === end authManager* stubs ===
     // --- end JS model HTTP implementation ---
   }
   return result;
