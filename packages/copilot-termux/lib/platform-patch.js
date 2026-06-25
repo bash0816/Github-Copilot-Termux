@@ -61,8 +61,10 @@ Module._load = function (request, parent, isMain) {
     // Rust tokio を使う関数群を no-op に差し替え。
     // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
     // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
+    // jsonrpcServer* は拡張 JSON-RPC サーバー (ThreadsafeFunction)、
+    // lspClient* は LSP クライアント (ThreadsafeFunction)。
     // featureFlagService* は同期 Rust のため除外（no-op にすると .handle クラッシュ）。
-    const TOKIO_PATTERN = /^(modelHttp|networkFetch|ahpRelay|websocketResponses|sessionStore|sessionSqlite)/;
+    const TOKIO_PATTERN = /^(modelHttp|networkFetch|ahpRelay|websocketResponses|sessionStore|sessionSqlite|jsonrpcServer|lspClient)/;
     for (const key of Object.keys(result)) {
       if (TOKIO_PATTERN.test(key) && typeof result[key] === 'function') {
         result[key] = () => undefined;
