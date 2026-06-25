@@ -9,16 +9,39 @@
     "url": "https://github.com/bash0816/Github-Copilot-Termux.git"
   },
   "homepage": "https://github.com/bash0816/Github-Copilot-Termux#readme",
-  "keywords": ["termux", "android", "github-copilot", "copilot-cli", "aarch64"],
+  "keywords": [
+    "termux",
+    "android",
+    "github-copilot",
+    "copilot-cli",
+    "aarch64"
+  ],
   "bin": {
     "copilot": "bin/copilot",
     "copilot-termux": "bin/copilot-termux"
   },
   "scripts": {},
-  "files": ["bin", "lib/platform-patch.js", "lib/setup.js", "lib/bionic-compat.so", "lib/native/pty.node", "scripts/bionic-compat.c", "config", "LICENSE", "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-LICENSES/", "README.md"],
+  "files": [
+    "bin",
+    "lib/platform-patch.js",
+    "lib/setup.js",
+    "lib/bionic-compat.so",
+    "lib/native/pty.node",
+    "scripts/bionic-compat.c",
+    "config",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.md",
+    "THIRD-PARTY-LICENSES/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },
-  "os": ["android", "linux"],
-  "cpu": ["arm64"]
+  "os": [
+    "android",
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ]
 }
