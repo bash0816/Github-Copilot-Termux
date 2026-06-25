@@ -19,6 +19,10 @@ const Module = require('module');
 const fs = require('fs');
 const path = require('path');
 
+const _pkgVersion = (() => {
+  try { return require(path.join(__dirname, '..', 'package.json')).version; } catch (_) { return '1.0.64'; }
+})();
+
 // Bundled Termux-native pty.node (built against bionic, not glibc).
 const NATIVE_PTY = path.join(__dirname, 'native', 'pty.node');
 
@@ -58,6 +62,8 @@ Module._load = function (request, parent, isMain) {
   const result = origLoad(request, parent, isMain);
   if (typeof request === 'string' &&
       path.basename(request) === 'runtime.node') {
+    if (result.__copilotTermuxPatched) return result;
+    result.__copilotTermuxPatched = true;
     // Rust tokio を使う関数群を no-op に差し替え。
     // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
     // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
@@ -478,7 +484,7 @@ Module._load = function (request, parent, isMain) {
       try {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const res = await globalThis.fetch(`${apiHost}/user`, {
-          headers: { Authorization: `token ${token}`, 'User-Agent': 'copilot-termux/1.0.64' },
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}` },
           signal: AbortSignal.timeout(5000),
         });
         if (res.ok) login = (await res.json()).login;
@@ -492,10 +498,12 @@ Module._load = function (request, parent, isMain) {
     async function _resolveOrCache(uuid, token, env) {
       const entry = _authMgr.get(uuid);
       if (!entry) return null;
-      const hostUri = result.githubGetUri(
-        (env && env.COPILOT_GH_HOST) || undefined,
-        (env && env.GH_HOST) || undefined
-      ) || 'https://github.com';
+      const hostUri = ((typeof result.githubGetUri === 'function'
+        ? result.githubGetUri(
+            (env && env.COPILOT_GH_HOST) || undefined,
+            (env && env.GH_HOST) || undefined
+          )
+        : null) || 'https://github.com').replace(/\/+$/, '');
       if (entry.cachedInfo !== null && (entry.cachedToken !== token || entry.cachedHost !== hostUri)) {
         entry.cachedInfo = null;
         entry.pendingInfo = null;
@@ -508,6 +516,9 @@ Module._load = function (request, parent, isMain) {
           entry.cachedHost = hostUri;
           entry.pendingInfo = null;
           return info;
+        }).catch(err => {
+          entry.pendingInfo = null;
+          throw err;
         });
       }
       return entry.pendingInfo;
@@ -536,7 +547,7 @@ Module._load = function (request, parent, isMain) {
       if (entry && authInfoJson) {
         try {
           const authInfo = JSON.parse(authInfoJson);
-          const hostUri = (authInfo && authInfo.host) || 'https://github.com';
+          const hostUri = ((authInfo && authInfo.host) || 'https://github.com').replace(/\/+$/, '');
           entry.cachedInfo = JSON.stringify({ authInfo, token: token || null });
           entry.cachedToken = token || null;
           entry.cachedHost = hostUri;
@@ -563,7 +574,7 @@ Module._load = function (request, parent, isMain) {
       try {
         const apiHost = (hostUri || 'https://github.com').replace('://github.com', '://api.github.com');
         const res = await globalThis.fetch(`${apiHost}/user`, {
-          headers: { Authorization: `token ${token}`, 'User-Agent': userAgent || 'copilot-termux/1.0.64' },
+          headers: { Authorization: `token ${token}`, 'User-Agent': userAgent || `copilot-termux/${_pkgVersion}` },
           signal: AbortSignal.timeout(5000),
         });
         if (res.ok) login = (await res.json()).login;
@@ -577,10 +588,16 @@ Module._load = function (request, parent, isMain) {
     let _tokSeq = 9e6;
     result.tokenStoreCreate = function() { const id = ++_tokSeq; _tokStore.set(id, new Map()); return id; };
     result.tokenStoreDestroy = function(h) { _tokStore.delete(h); };
-    result.tokenStoreGetToken = async function() { return null; };
+    result.tokenStoreGetToken = async function(h, key) {
+      const m = _tokStore.get(h);
+      return m ? (m.get(key) ?? null) : null;
+    };
     result.tokenStoreStoreToken = function(h, key, tok) { const m = _tokStore.get(h); if (m) m.set(key, tok); };
     result.tokenStoreRemoveToken = function(h, key) { const m = _tokStore.get(h); if (m) m.delete(key); };
-    result.tokenStoreGetAnyToken = async function() { return null; };
+    result.tokenStoreGetAnyToken = async function(h) {
+      const m = _tokStore.get(h);
+      return (m && m.size > 0) ? [...m.values()][0] : null;
+    };
     result.tokenStoreStoreCurrentTokenInConfig = async function() {};
     // === end tokenStore* stubs ===
 
@@ -617,9 +634,17 @@ Module._load = function (request, parent, isMain) {
     result.pathManagerAddDirectory = function(h, dir) { const e = _pathMgr.get(h); if (e) e.dirs.push(dir); };
     result.pathManagerGetDirectories = function(h) { return (_pathMgr.get(h) || {}).dirs || []; };
     result.pathManagerGetPrimaryDirectory = function(h) { return (_pathMgr.get(h) || {}).primary || null; };
-    result.pathManagerIsPathWithinWorkspace = function(h, p) { return true; };
+    result.pathManagerIsPathWithinWorkspace = function(h, p) {
+      const e = _pathMgr.get(h);
+      if (!e || !e.primary) return true;
+      return p === e.primary || p.startsWith(e.primary + '/');
+    };
     result.pathManagerUpdatePrimaryDirectory = function(h, dir) { const e = _pathMgr.get(h); if (e) e.primary = dir; };
-    result.pathManagerIsPathWithinAllowedDirectories = function(h, p) { return true; };
+    result.pathManagerIsPathWithinAllowedDirectories = function(h, p) {
+      const e = _pathMgr.get(h);
+      if (!e || e.dirs.length === 0) return true;
+      return e.dirs.some(dir => p === dir || p.startsWith(dir + '/'));
+    };
     // === end pathManager* stubs ===
 
     // === telemetryQueue* JS stubs ===
