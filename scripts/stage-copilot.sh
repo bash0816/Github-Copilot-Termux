@@ -64,7 +64,7 @@ fi
 
 # 1. Stage @github/copilot
 mkdir -p "$STAGING_DIR"
-npm pack "@github/copilot@$COPILOT_VERSION" --pack-destination "$PACK_DIR" > /dev/null
+npm pack "@github/copilot-linuxmusl-arm64@$COPILOT_VERSION" --pack-destination "$PACK_DIR" > /dev/null
 TARBALLS=()
 shopt -s nullglob
 TARBALLS=("$PACK_DIR"/*.tgz)
@@ -77,7 +77,7 @@ cp -r "$PACK_DIR/package/." "$STAGING_DIR/"
 # Also confirm the extracted package name and version match expectations.
 _PKG_NAME=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.name||"")}catch(e){}' "${STAGING_DIR}/package.json" 2>/dev/null)
 _PKG_VER=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.version||"")}catch(e){}' "${STAGING_DIR}/package.json" 2>/dev/null)
-[[ "$_PKG_NAME" == "@github/copilot" ]] || {
+[[ "$_PKG_NAME" == "@github/copilot-linuxmusl-arm64" ]] || {
   echo "Error: unexpected package name in staged tarball: ${_PKG_NAME}" >&2; exit 1
 }
 [[ "$_PKG_VER" == "$COPILOT_VERSION" ]] || {
@@ -97,7 +97,7 @@ else
   fi
   echo "Error: failed to install staged copilot" >&2; exit 1
 fi
-echo "Staged @github/copilot@$COPILOT_VERSION"
+echo "Staged @github/copilot-linuxmusl-arm64@$COPILOT_VERSION"
 
 # 2. Stage glibc Node.js binary (optional)
 if [[ -n "$NODE_ARTIFACT" ]]; then

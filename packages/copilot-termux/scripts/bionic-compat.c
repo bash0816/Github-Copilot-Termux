@@ -58,6 +58,7 @@ typedef float  (*fn_ff)(float);
 static fn_ddd _pow;
 static fn_dd  _log;
 static fn_dd  _log2;
+static fn_dd  _exp2;
 static fn_ff  _expf;
 static fn_ff  _log10f;
 static fn_ff  _sinf;
@@ -67,6 +68,7 @@ static void compat_init(void) {
     _pow    = (fn_ddd)dlsym(RTLD_NEXT, "pow");
     _log    = (fn_dd) dlsym(RTLD_NEXT, "log");
     _log2   = (fn_dd) dlsym(RTLD_NEXT, "log2");
+    _exp2   = (fn_dd) dlsym(RTLD_NEXT, "exp2");
     _expf   = (fn_ff) dlsym(RTLD_NEXT, "expf");
     _log10f = (fn_ff) dlsym(RTLD_NEXT, "log10f");
     _sinf   = (fn_ff) dlsym(RTLD_NEXT, "sinf");
@@ -77,6 +79,7 @@ static void compat_init(void) {
 double pow(double x, double y)   { if (!_pow)    abort(); return _pow(x, y); }
 double log(double x)             { if (!_log)    abort(); return _log(x); }
 double log2(double x)            { if (!_log2)   abort(); return _log2(x); }
+double exp2(double x)            { if (!_exp2)   abort(); return _exp2(x); }
 float  expf(float x)             { if (!_expf)   abort(); return _expf(x); }
 float  log10f(float x)           { if (!_log10f) abort(); return _log10f(x); }
 float  sinf(float x)             { if (!_sinf)   abort(); return _sinf(x); }

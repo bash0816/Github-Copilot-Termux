@@ -48,20 +48,20 @@ async function fetchWithIntegrity(url, expectedIntegrity) {
 }
 
 async function setup() {
-  const { version, integrity } = manifest.copilot;
+  const { package: pkg = '@github/copilot-linuxmusl-arm64', version, integrity } = manifest.copilot;
   const versionDir = path.join(CACHE_DIR, version);
   const stagingDir = `${versionDir}.staging`;
 
   if (fs.existsSync(path.join(versionDir, 'index.js'))) {
     fs.rmSync(stagingDir, { recursive: true, force: true });
-    console.log(`@github/copilot@${version} already installed, refreshing symlink...`);
+    console.log(`${pkg}@${version} already installed, refreshing symlink...`);
   } else {
-    console.log(`Fetching @github/copilot@${version} metadata...`);
-    const metaBuf = await httpsGet(`${REGISTRY}/@github/copilot/${version}`, { Accept: 'application/json' });
+    console.log(`Fetching ${pkg}@${version} metadata...`);
+    const metaBuf = await httpsGet(`${REGISTRY}/${pkg}/${version}`, { Accept: 'application/json' });
     const meta = JSON.parse(metaBuf.toString());
     const tarballUrl = meta.dist.tarball;
 
-    console.log(`Downloading @github/copilot@${version}...`);
+    console.log(`Downloading ${pkg}@${version}...`);
     const tarball = await fetchWithIntegrity(tarballUrl, integrity);
 
     const tarballPath = path.join(CACHE_DIR, `copilot-${version}.tgz`);
