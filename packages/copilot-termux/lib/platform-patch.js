@@ -108,6 +108,35 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
+    // modelsFilterToPicker: model_picker_enabled=false のモデルを全部除外してしまう。
+    // GitHub Copilot API は現在全モデルに model_picker_enabled=false を返すため、
+    // modelListCache が空になり m2() の fallback が null を返して "Auto-mode unavailable" になる。
+    // → 全インデックスを返して全モデルを modelListCache に含める。
+    if (typeof result.modelsFilterToPicker === 'function') {
+      result.modelsFilterToPicker = function(modelsJson) {
+        try {
+          const models = JSON.parse(modelsJson);
+          return Array.isArray(models) ? models.map((_, i) => i) : [];
+        } catch(_) { return []; }
+      };
+    }
+    // authGetCopilotApiUrl: type=token/env/user/gh-cli/api-key では native が null を返す。
+    // _b() はこれを見て models=[] を返しモデル選択が "No supported model" になる。
+    // OAuth token でも標準 copilot API URL は固定のため、null 時はデフォルト URL を返す。
+    if (typeof result.authGetCopilotApiUrl === 'function') {
+      const _nativeGetCopilotApiUrl = result.authGetCopilotApiUrl;
+      result.authGetCopilotApiUrl = function(authInfoJson, token) {
+        const r = _nativeGetCopilotApiUrl(authInfoJson, token);
+        if (r != null) return r;
+        try {
+          const info = JSON.parse(authInfoJson);
+          if (info && info.type !== 'hmac') {
+            return process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
+          }
+        } catch (_) {}
+        return r;
+      };
+    }
     // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
     if (typeof result.capiClientListModels === 'function') {
       result.capiClientListModels = async function(handle, _includeHidden, _skipCache, _applyModelLimitCaps, _networkingConfigId) {
@@ -121,7 +150,7 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        const baseUrl = 'https://api.githubcopilot.com';
+        const baseUrl = process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
         let res;
         try {
           res = await globalThis.fetch(`${baseUrl}/models`, {method: 'GET', headers: authHeaders});
@@ -481,6 +510,7 @@ Module._load = function (request, parent, isMain) {
 
     async function _buildAuthInfo(token, hostUri) {
       let login = null;
+      let copilotUser = null;
       try {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const res = await globalThis.fetch(`${apiHost}/user`, {
@@ -489,8 +519,25 @@ Module._load = function (request, parent, isMain) {
         });
         if (res.ok) login = (await res.json()).login;
       } catch (_) {}
+      // copilot_internal/user から copilotUser 全体を取得して authInfo に含める。
+      // app.js の Wa(authInfo) は authInfo.copilotUser.endpoints.api から CAPI base URL を導く。
+      // copilotUser: null のままでは is_mcp_enabled・quota・plan 情報も失われる。
+      // env var は後続の capiClientListModels stub / authGetCopilotApiUrl stub でも参照するため並記する。
+      try {
+        const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
+        const r = await globalThis.fetch(`${apiHost}/copilot_internal/user`, {
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': 'copilot-chat' },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (r.ok) {
+          const info = await r.json();
+          copilotUser = info;
+          const apiUrl = info?.endpoints?.api;
+          if (apiUrl && typeof apiUrl === 'string') process.env.COPILOT_API_URL = apiUrl;
+        }
+      } catch (_) {}
       return JSON.stringify({
-        authInfo: { type: 'token', host: hostUri, token, login, copilotUser: null },
+        authInfo: { type: 'token', host: hostUri, token, login, copilotUser },
         token,
       });
     }
