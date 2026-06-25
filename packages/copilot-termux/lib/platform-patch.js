@@ -515,6 +515,13 @@ Module._load = function (request, parent, isMain) {
           entry.cachedToken = token;
           entry.cachedHost = hostUri;
           entry.pendingInfo = null;
+          try {
+            const parsed = JSON.parse(info);
+            if (parsed && parsed.authInfo &&
+                typeof parsed.authInfo.login === 'string' && parsed.authInfo.login.length > 0) {
+              _loginTokens.set(`${hostUri}:${parsed.authInfo.login}`, token);
+            }
+          } catch (_) {}
           return info;
         }).catch(err => {
           entry.pendingInfo = null;
@@ -524,15 +531,22 @@ Module._load = function (request, parent, isMain) {
       return entry.pendingInfo;
     }
 
-    result.authManagerLoadAuthInfo = async function(uuid, env, token) {
+    result.authManagerLoadAuthInfo = async function(uuid, env, _storeTokenPlaintext) {
+      const token = await _readGhToken(env);
       if (!token) return null;
       return _resolveOrCache(uuid, token, env);
     };
-    result.authManagerGetCurrentAuthInfo = async function(uuid, env, token) {
+    result.authManagerGetCurrentAuthInfo = async function(uuid, env, _storeTokenPlaintext) {
+      const entry = _authMgr.get(uuid);
+      if (!entry) return null;
+      if (entry.cachedInfo !== null) return entry.cachedInfo;
+      if (entry.pendingInfo) return entry.pendingInfo;
+      const token = await _readGhToken(env);
       if (!token) return null;
       return _resolveOrCache(uuid, token, env);
     };
-    result.authManagerGetAllAuthAvailable = async function(uuid, env, token) {
+    result.authManagerGetAllAuthAvailable = async function(uuid, env, _storeTokenPlaintext) {
+      const token = await _readGhToken(env);
       if (!token) return [];
       const info = await _resolveOrCache(uuid, token, env);
       return info ? [info] : [];
@@ -555,8 +569,26 @@ Module._load = function (request, parent, isMain) {
         } catch (_) {}
       }
     };
-    result.authManagerLoginUser = async function(uuid, host, deviceCode, clientSecret) {
-      return null; // 既知制限: デバイスフロー非対応
+    result.authManagerLoginUser = async function(uuid, host, login, token) {
+      const entry = _authMgr.get(uuid);
+      if (!entry || !token) return;
+      const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
+      _loginTokens.set(`${hostUri}:${login || ''}`, token);
+      entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+        entry.cachedInfo = info;
+        entry.cachedToken = token;
+        entry.cachedHost = hostUri;
+        entry.pendingInfo = null;
+        try {
+          const parsed = JSON.parse(info);
+          if (parsed && parsed.authInfo &&
+              typeof parsed.authInfo.login === 'string' && parsed.authInfo.login.length > 0) {
+            _loginTokens.set(`${hostUri}:${parsed.authInfo.login}`, token);
+          }
+        } catch (_) {}
+        return info;
+      }).catch(err => { entry.pendingInfo = null; return null; });
+      await entry.pendingInfo; // ensure cachedInfo is set before app.js continues
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
       const e = _authMgr.get(uuid);
@@ -584,19 +616,34 @@ Module._load = function (request, parent, isMain) {
     };
     // === end authManager* stubs ===
     // === tokenStore* JS stubs (bionic: tokio ThreadsafeFunction crash) ===
+    // Verified tokens: set by authManagerLoginUser / _resolveOrCache after /user API check
+    const _loginTokens = new Map(); // "host:login" → oauthToken
+
     const _tokStore = new Map();
     let _tokSeq = 9e6;
     result.tokenStoreCreate = function() { const id = ++_tokSeq; _tokStore.set(id, new Map()); return id; };
     result.tokenStoreDestroy = function(h) { _tokStore.delete(h); };
-    result.tokenStoreGetToken = async function(h, key) {
+    result.tokenStoreGetToken = async function(h, host, login) {
       const m = _tokStore.get(h);
-      return m ? (m.get(key) ?? null) : null;
+      const key = `${(host || 'https://github.com').replace(/\/+$/, '')}:${login || ''}`;
+      if (m) { const v = m.get(key); if (v != null) return v; }
+      const lt = _loginTokens.get(key);
+      if (lt != null) { if (m) m.set(key, lt); return lt; }
+      if (login) return null; // login specified: refuse unverified fallback
+      return _readGhToken(null);
     };
-    result.tokenStoreStoreToken = function(h, key, tok) { const m = _tokStore.get(h); if (m) m.set(key, tok); };
-    result.tokenStoreRemoveToken = function(h, key) { const m = _tokStore.get(h); if (m) m.delete(key); };
+    result.tokenStoreStoreToken = function(h, token, host, login) {
+      const m = _tokStore.get(h);
+      if (m && token) m.set(`${(host || 'https://github.com').replace(/\/+$/, '')}:${login || ''}`, token);
+    };
+    result.tokenStoreRemoveToken = function(h, host, login) {
+      const m = _tokStore.get(h);
+      if (m) m.delete(`${(host || 'https://github.com').replace(/\/+$/, '')}:${login || ''}`);
+    };
     result.tokenStoreGetAnyToken = async function(h) {
       const m = _tokStore.get(h);
-      return (m && m.size > 0) ? [...m.values()][0] : null;
+      if (m && m.size > 0) return [...m.values()][0];
+      return _readGhToken(null);
     };
     result.tokenStoreStoreCurrentTokenInConfig = async function() {};
     // === end tokenStore* stubs ===
@@ -707,12 +754,48 @@ Module._load = function (request, parent, isMain) {
     // === end ifcEngine* stubs ===
     // --- end JS model HTTP implementation ---
   }
+
+  // === cli-native.node stubs (1.0.64+: color scheme fns use Rust tokio → SIGSEGV on bionic) ===
+  if (typeof request === 'string' && path.basename(request) === 'cli-native.node') {
+    if (!result.__copilotTermuxCliPatched) {
+      result.__copilotTermuxCliPatched = true;
+      // Rust tokio background thread → SIGSEGV on bionic. Return null so callers
+      // fall back to "unspecified" color scheme (uses default theme).
+      if (typeof result.getColorScheme === 'function') {
+        result.getColorScheme = () => null;
+      }
+      if (typeof result.startColorSchemeListener === 'function') {
+        result.startColorSchemeListener = (_cb) => undefined;
+      }
+      if (typeof result.stopColorSchemeListener === 'function') {
+        result.stopColorSchemeListener = () => undefined;
+      }
+    }
+  }
+  // === end cli-native.node stubs ===
+
   return result;
 };
 
 // [Android bionic 対応] app.js の oPt() が globalThis.fetch を Rust ベースの B7 に
 // 差し替えるのを阻止する。linuxmusl-arm64/runtime.node の Rust ネットワークスタックは
 // bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
+// GitHub OAuth token via env var or gh CLI (keychain unavailable on bionic)
+async function _readGhToken(env) {
+  const envToken =
+    (env && (env.GITHUB_TOKEN || env.GH_TOKEN || env.COPILOT_GITHUB_TOKEN)) ||
+    process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN;
+  if (envToken) return envToken;
+  try {
+    const { execFile } = require('child_process');
+    return await new Promise(resolve => {
+      execFile('gh', ['auth', 'token'], { encoding: 'utf8', timeout: 5000 }, (err, stdout) => {
+        resolve(err ? null : (stdout.trim() || null));
+      });
+    });
+  } catch (_) { return null; }
+}
+
 const _nativeFetch = globalThis.fetch;
 Object.defineProperty(globalThis, 'fetch', {
   configurable: true,
