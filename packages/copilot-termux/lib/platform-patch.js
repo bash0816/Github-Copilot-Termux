@@ -572,6 +572,114 @@ Module._load = function (request, parent, isMain) {
       return JSON.stringify({ type: 'token', host, token, login, copilotUser: null });
     };
     // === end authManager* stubs ===
+    // === tokenStore* JS stubs (bionic: tokio ThreadsafeFunction crash) ===
+    const _tokStore = new Map();
+    let _tokSeq = 9e6;
+    result.tokenStoreCreate = function() { const id = ++_tokSeq; _tokStore.set(id, new Map()); return id; };
+    result.tokenStoreDestroy = function(h) { _tokStore.delete(h); };
+    result.tokenStoreGetToken = async function() { return null; };
+    result.tokenStoreStoreToken = function(h, key, tok) { const m = _tokStore.get(h); if (m) m.set(key, tok); };
+    result.tokenStoreRemoveToken = function(h, key) { const m = _tokStore.get(h); if (m) m.delete(key); };
+    result.tokenStoreGetAnyToken = async function() { return null; };
+    result.tokenStoreStoreCurrentTokenInConfig = async function() {};
+    // === end tokenStore* stubs ===
+
+    // === urlManager* JS stubs ===
+    const _urlMgr = new Map();
+    let _urlSeq = 8e6;
+    result.urlManagerCreate = function(urls, unrestricted) {
+      const id = ++_urlSeq;
+      _urlMgr.set(id, { urls: Array.isArray(urls) ? [...urls] : [], unrestricted: !!unrestricted });
+      return id;
+    };
+    result.urlManagerAddUrl = function(h, url) { const e = _urlMgr.get(h); if (e) e.urls.push(url); };
+    result.urlManagerDispose = function(h) { _urlMgr.delete(h); };
+    result.urlManagerGetUrls = function(h) { return (_urlMgr.get(h) || {}).urls || []; };
+    result.urlManagerIsUrlAllowed = function(h, url) { return true; };
+    result.urlManagerIsUnrestrictedMode = function(h) { return true; };
+    result.urlManagerSetUnrestrictedMode = function(h, v) { const e = _urlMgr.get(h); if (e) e.unrestricted = v; };
+    // === end urlManager* stubs ===
+
+    // === pathManager* JS stubs ===
+    const _pathMgr = new Map();
+    let _pathSeq = 7e6;
+    result.pathManagerCreateRestricted = async function(dirs, primary) {
+      const id = ++_pathSeq;
+      _pathMgr.set(id, { dirs: Array.isArray(dirs) ? [...dirs] : [], primary: primary || null });
+      return id;
+    };
+    result.pathManagerCreateUnrestricted = async function(primary) {
+      const id = ++_pathSeq;
+      _pathMgr.set(id, { dirs: [], primary: primary || null });
+      return id;
+    };
+    result.pathManagerDispose = function(h) { _pathMgr.delete(h); };
+    result.pathManagerAddDirectory = function(h, dir) { const e = _pathMgr.get(h); if (e) e.dirs.push(dir); };
+    result.pathManagerGetDirectories = function(h) { return (_pathMgr.get(h) || {}).dirs || []; };
+    result.pathManagerGetPrimaryDirectory = function(h) { return (_pathMgr.get(h) || {}).primary || null; };
+    result.pathManagerIsPathWithinWorkspace = function(h, p) { return true; };
+    result.pathManagerUpdatePrimaryDirectory = function(h, dir) { const e = _pathMgr.get(h); if (e) e.primary = dir; };
+    result.pathManagerIsPathWithinAllowedDirectories = function(h, p) { return true; };
+    // === end pathManager* stubs ===
+
+    // === telemetryQueue* JS stubs ===
+    let _telSeq = 6e6;
+    result.telemetryQueueCreate = function(name, _config) { return ++_telSeq; };
+    result.telemetryQueueDispose = function(h) {};
+    result.telemetryQueueEnqueue = function(h, event) {};
+    result.telemetryQueueSetDebugLogPayload = function(h, v) {};
+    // === end telemetryQueue* stubs ===
+
+    // === permissionService* JS stubs ===
+    const _permSvc = new Map();
+    let _permSeq = 5e6;
+    result.permissionServiceCreate = function(config) {
+      const id = ++_permSeq;
+      _permSvc.set(id, { approveAll: !!(config && config.approveAllTool) });
+      return id;
+    };
+    result.permissionServiceDispose = function(h) { _permSvc.delete(h); };
+    result.permissionServiceRequest = async function(h, reqJson) {
+      return JSON.stringify({ kind: 'approved' });
+    };
+    result.permissionServiceComplete = function(h, token, ok, resultJson) {};
+    result.permissionServiceConfigure = function(h, approveAllTool, approveAllRead, approvedRules, deniedRules, pathMgr, urlMgr) {};
+    result.permissionServiceAddApprovedRules = function(h, rules) {};
+    result.permissionServiceGetApproveAllTool = function(h) { return (_permSvc.get(h) || {}).approveAll ?? false; };
+    result.permissionServiceSetApproveAllTool = function(h, v) { const e = _permSvc.get(h); if (e) e.approveAll = v; };
+    result.permissionServiceRemoveApprovedRules = function(h, rules) {};
+    result.permissionServiceCheckSamplingApproval = function(h, k) { return true; };
+    result.permissionServiceResetSessionApprovals = function(h) {};
+    result.permissionServiceAddLocationApprovedRules = function(h, rules) {};
+    result.permissionServiceRemoveLocationApprovedRules = function(h, rules) {};
+    // === end permissionService* stubs ===
+
+    // === lspManager* JS stubs ===
+    let _lspMgrSeq = 4e6;
+    result.lspManagerCreate = function() { return ++_lspMgrSeq; };
+    result.lspManagerClear = function(h) {};
+    result.lspManagerPlanForFile = function(h, file, lang, config) { return null; };
+    result.lspManagerRemoveClient = function(h, key) {};
+    result.lspManagerShutdownKeys = function(h) { return []; };
+    result.lspManagerPlanForServerId = function(h, id) { return null; };
+    result.lspManagerCachedClientCount = function(h) { return 0; };
+    result.lspManagerRelevantServerIds = function(h, file, lang) { return []; };
+    // === end lspManager* stubs ===
+
+    // === ifcEngine* JS stubs ===
+    const _ifc = new Map();
+    let _ifcSeq = 3e6;
+    result.ifcEngineCreate = function(config) { const id = ++_ifcSeq; _ifc.set(id, {}); return id; };
+    result.ifcEngineDispose = function(h) { _ifc.delete(h); };
+    result.ifcEngineToJson = function(h) { return '{}'; };
+    result.ifcEnginePreToolHook = async function(h, tool, argsJson, fetchHandler) { return { converged: true }; };
+    result.ifcEngineFetchComplete = function(h, resp) {};
+    result.ifcEngineGetContextLabel = function(h) { return null; };
+    result.ifcEngineSetContextLabel = function(h, label) {};
+    result.ifcEnginePostToolExecution = async function(h, tool, argsJson, fetchHandler) {
+      return { converged: true, applied: false, updated: false };
+    };
+    // === end ifcEngine* stubs ===
     // --- end JS model HTTP implementation ---
   }
   return result;
