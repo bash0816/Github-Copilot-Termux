@@ -84,4 +84,4 @@ jobs:
 
           echo "Dispatched npm-package.yml verify (publish=false, npm_tag=candidate) for version ${NEW_VERSION}"
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_PRIVATE_ARTIFACT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
