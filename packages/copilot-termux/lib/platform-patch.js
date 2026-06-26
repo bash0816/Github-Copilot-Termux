@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 
 const _pkgVersion = (() => {
-  try { return require(path.join(__dirname, '..', 'package.json')).version; } catch (_) { return '1.0.64'; }
+  try { return require(path.join(__dirname, '..', 'package.json')).version; } catch (_) { return '1.0.65'; }
 })();
 
 // Bundled Termux-native pty.node (built against bionic, not glibc).
@@ -748,6 +748,51 @@ Module._load = function (request, parent, isMain) {
     result.telemetryQueueEnqueue = function(h, event) {};
     result.telemetryQueueSetDebugLogPayload = function(h, v) {};
     // === end telemetryQueue* stubs ===
+
+    // === telemetryAppInsightsServiceState* JS stubs (1.0.65+: Azure AppInsights HTTP I/O → tokio SIGSEGV on bionic) ===
+    if (typeof result.telemetryAppInsightsServiceStateCreate === 'function') {
+      result.telemetryAppInsightsServiceStateCreate = function() { return ++_telSeq; };
+      result.telemetryAppInsightsServiceStateDispose = function(h) {};
+      result.telemetryAppInsightsServiceStateEnqueue = function(h, e, n, r) { return JSON.stringify({}); };
+      result.telemetryAppInsightsServiceStateAuthSucceeded = function(h, e) { return JSON.stringify({}); };
+      result.telemetryAppInsightsServiceStateLogout = function(h) { return JSON.stringify({}); };
+    }
+    // === end telemetryAppInsightsServiceState* stubs ===
+
+    // === telemetryDelegatingSender* JS stubs (1.0.65+: fire-and-forget HTTP send → tokio SIGSEGV on bionic) ===
+    if (typeof result.telemetryDelegatingSenderCreate === 'function') {
+      result.telemetryDelegatingSenderCreate = function() { return ++_telSeq; };
+      result.telemetryDelegatingSenderDispose = function(h) { return JSON.stringify({ disposeDelegate: false }); };
+      result.telemetryDelegatingSenderConfigure = function(h, hasDelegate) {
+        return JSON.stringify({ disposePreviousDelegate: false, disposeNewDelegate: false });
+      };
+      result.telemetryDelegatingSenderIsConfigured = function(h) { return false; };
+      result.telemetryDelegatingSenderRequiresDelegate = function(h) {};
+      result.telemetryDelegatingSenderSetInternalCorrelationIds = function(h, ids) {
+        return JSON.stringify({ applyToDelegate: false });
+      };
+    }
+    // === end telemetryDelegatingSender* stubs ===
+
+    // === telemetrySessionTelemetryState* JS stubs (1.0.65+) ===
+    if (typeof result.telemetrySessionTelemetryStateCreate === 'function') {
+      result.telemetrySessionTelemetryStateCreate = function(h, e) { return ++_telSeq; };
+      result.telemetrySessionTelemetryStateDispose = function(h) {};
+      result.telemetrySessionTelemetryStateSnapshot = function(h) { return JSON.stringify({ telemetryEvents: [] }); };
+      result.telemetrySessionTelemetryStateProcessSessionEvent = function(h, e, n) {
+        return JSON.stringify({ telemetryEvents: [] });
+      };
+      result.telemetrySessionTelemetryStateProcessToolsUpdated = function(h, e) {};
+    }
+    // === end telemetrySessionTelemetryState* stubs ===
+
+    // === telemetryLegacyUsageHandler* JS stubs (1.0.65+) ===
+    if (typeof result.telemetryLegacyUsageHandlerCreate === 'function') {
+      result.telemetryLegacyUsageHandlerCreate = function(h, e) { return ++_telSeq; };
+      result.telemetryLegacyUsageHandlerDispose = function(h) {};
+      result.telemetryLegacyUsageHandlerProcessEvent = function(h, e) { return JSON.stringify([]); };
+    }
+    // === end telemetryLegacyUsageHandler* stubs ===
 
     // === permissionService* JS stubs ===
     const _permSvc = new Map();
