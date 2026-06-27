@@ -172,9 +172,9 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        // モデルフェッチは account-specific endpoint（権限に合ったモデルリスト取得）
-        // copilotUrl はネイティブが LLM リクエストに使う URL → 1.0.63 同様に標準 endpoint を返す
-        const fetchUrl = process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
+        // /models fetch は常に標準 CAPI（enterprise proxy URL では 421 になるため）
+        // copilotUrl（推論エンドポイント）は標準 CAPI 固定（enterprise proxy 検証後に変更検討）
+        const fetchUrl = 'https://api.githubcopilot.com';
         const copilotUrl = 'https://api.githubcopilot.com';
         _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl });
         let res;
@@ -681,6 +681,8 @@ Module._load = function (request, parent, isMain) {
         });
         entry.cachedInfo = null;
         entry.pendingInfo = null;
+        entry.copilotToken = null;
+        entry.copilotTokenExpiry = 0;
       }
       if (entry.cachedInfo !== null) {
         _dbg('resolveOrCache:cache-hit', { tokenHash: _tokenHash(token) });
@@ -700,6 +702,10 @@ Module._load = function (request, parent, isMain) {
                 typeof parsed.authInfo.login === 'string' && parsed.authInfo.login.length > 0) {
               _loginTokens.set(`${hostUri}:${parsed.authInfo.login}`, token);
             }
+            // authManagerSwitchToAuth / authManagerLoginUser と同様に copilotToken を設定
+            // _resolveOrCache 経由（TUI 初回起動）でも copilot token が使われるようにする
+            entry.copilotToken = (parsed && parsed.copilotToken) || null;
+            entry.copilotTokenExpiry = (parsed && parsed.copilotTokenExpiry) || 0;
           } catch (_) {}
           return info;
         }).catch(err => {
@@ -733,7 +739,7 @@ Module._load = function (request, parent, isMain) {
     result.authManagerGetLastAuthErrors = function(uuid) { return []; };
     result.authManagerClearCache = function(uuid) {
       const e = _authMgr.get(uuid);
-      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
+      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; }
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
@@ -745,6 +751,8 @@ Module._load = function (request, parent, isMain) {
       entry.cachedToken = null;
       entry.cachedHost = null;
       entry.pendingInfo = null;
+      entry.copilotToken = null;
+      entry.copilotTokenExpiry = 0;
       if (!token) return;
       const hostUri = (() => {
         try { return (JSON.parse(authInfoJson)?.host || 'https://github.com').replace(/\/+$/, ''); }
@@ -795,7 +803,7 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
       const e = _authMgr.get(uuid);
-      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; }
       return true;
     };
     result.authManagerRefreshCopilotUser = async function(uuid) {
