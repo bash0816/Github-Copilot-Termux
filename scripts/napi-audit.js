@@ -29,31 +29,39 @@ function loadKnownSet(config) {
   return known;
 }
 
+function loadPendingSet(config) {
+  const pending = new Set();
+  for (const value of config.pending_git_async_stubs || []) pending.add(value);
+  return pending;
+}
+
 function classifyCandidates(candidates, config) {
   const known = loadKnownSet(config);
+  const pending = loadPendingSet(config);
   const tokioPrefixes = Array.isArray(config.tokio_noop_prefixes) ? config.tokio_noop_prefixes : [];
   const newTokio = [];
-  const newGitAsync = [];
+  const newPendingGitAsync = [];
   const newUnknown = [];
 
   for (const candidate of candidates) {
     if (known.has(candidate)) continue;
+    if (pending.has(candidate)) continue;
     if (tokioPrefixes.some((prefix) => candidate.startsWith(prefix))) {
       newTokio.push(candidate);
       continue;
     }
     if (/^git[A-Z].*Async$/.test(candidate)) {
-      newGitAsync.push(candidate);
+      newPendingGitAsync.push(candidate);
       continue;
     }
-    if (candidate.length >= 15) {
+    if (/^[a-z]/.test(candidate) && candidate.length >= 15) {
       newUnknown.push(candidate);
     }
   }
 
   return {
     newTokio: uniqueSorted(newTokio),
-    newGitAsync: uniqueSorted(newGitAsync),
+    newPendingGitAsync: uniqueSorted(newPendingGitAsync),
     newUnknown: uniqueSorted(newUnknown),
   };
 }
@@ -64,7 +72,7 @@ function extractCandidates(runtimePath) {
   const seen = new Set();
   for (const line of output.split(/\r?\n/)) {
     const candidate = line.trim();
-    if (/^[a-z][a-zA-Z0-9]{7,}$/.test(candidate)) seen.add(candidate);
+    if (/^[a-zA-Z_$][a-zA-Z0-9_$]{6,}$/.test(candidate)) seen.add(candidate);
   }
   return Array.from(seen).sort();
 }
@@ -85,20 +93,15 @@ function patchTokioPattern(platformPatchPath, additions) {
   return updated !== original;
 }
 
-function patchGitAsyncStubs(platformPatchPath, additions) {
+function appendPendingGitAsyncStubs(configPath, additions) {
   if (!additions.length) return false;
-  const original = fs.readFileSync(platformPatchPath, 'utf8');
-  const objectMatch = original.match(/const GIT_ASYNC_STUBS = \{[\s\S]*?\n\s*\};/m);
-  if (!objectMatch) {
-    console.warn('[napi-audit] WARN: GIT_ASYNC_STUBS object not found; skipping platform patch update.');
-    return false;
-  }
-  const objectText = objectMatch[0];
-  const insertion = additions.map((name) => `      ${name}: async () => null,`).join('\n') + '\n';
-  const updatedObject = objectText.replace(/\n\s*\};$/, `\n${insertion}    };`);
-  const updated = original.replace(objectText, updatedObject);
-  if (updated !== original) fs.writeFileSync(platformPatchPath, updated);
-  return updated !== original;
+  const config = readJson(configPath);
+  const existing = Array.isArray(config.pending_git_async_stubs) ? config.pending_git_async_stubs : [];
+  const merged = uniqueSorted([...existing, ...additions]);
+  if (merged.length === existing.length) return false;
+  config.pending_git_async_stubs = merged;
+  writeJson(configPath, config);
+  return true;
 }
 
 function updateKnownExportsConfig(configPath, updates) {
@@ -116,7 +119,6 @@ function updateKnownExportsConfig(configPath, updates) {
   };
 
   appendUnique('tokio_noop_prefixes', updates.newTokio);
-  appendUnique('git_async_stubs', updates.newGitAsync);
   appendUnique('behavioral_stubs', updates.newUnknown);
 
   if (changed) writeJson(configPath, config);
@@ -128,18 +130,17 @@ function maybeAutoPatch(rootDir, updates) {
   const configPath = path.join(rootDir, 'config', 'napi-known-exports.json');
 
   const tokioPatched = patchTokioPattern(platformPatchPath, updates.newTokio);
-  const gitPatched = patchGitAsyncStubs(platformPatchPath, updates.newGitAsync);
+  const pendingGitPatched = appendPendingGitAsyncStubs(configPath, updates.newPendingGitAsync);
 
   // platform-patch.js への反映に成功した分のみ config に記録する
   // 失敗した場合に config へ記録すると次回監査で「既知」と誤判定されるため
   const configUpdates = {
     newTokio: tokioPatched ? updates.newTokio : [],
-    newGitAsync: gitPatched ? updates.newGitAsync : [],
     newUnknown: updates.newUnknown,
   };
   const configPatched = updateKnownExportsConfig(configPath, configUpdates);
 
-  return tokioPatched || gitPatched || configPatched;
+  return tokioPatched || pendingGitPatched || configPatched;
 }
 
 function main() {
@@ -162,15 +163,15 @@ function main() {
 
   const summary = {
     candidateCount: candidates.length,
-    knownCount: candidates.length - updates.newTokio.length - updates.newGitAsync.length - updates.newUnknown.length,
+    knownCount: candidates.length - updates.newTokio.length - updates.newPendingGitAsync.length - updates.newUnknown.length,
     newTokioCount: updates.newTokio.length,
-    newGitAsyncCount: updates.newGitAsync.length,
+    newPendingGitAsyncCount: updates.newPendingGitAsync.length,
     newUnknownCount: updates.newUnknown.length,
   };
 
   const output = {
     newTokio: updates.newTokio,
-    newGitAsync: updates.newGitAsync,
+    newPendingGitAsync: updates.newPendingGitAsync,
     newUnknown: updates.newUnknown,
     patchApplied,
     version,
