@@ -108,25 +108,16 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
-    // modelsFilterToPicker: native-first。native が空のとき（model_picker_enabled=true のモデルが
-    // 全くない場合）のみ policy フィルタ付き fallback。
-    // free アカウントでは全モデルが model_picker_enabled=false → native 空 → fallback 発動。
-    // Fix 1 (MODEL-001): fallback で policy.state=disabled モデルを除外して auto が 400 になるのを防ぐ。
+    // modelsFilterToPicker: native-first。native 結果をそのまま返す。
+    // free アカウントは全モデル model_picker_enabled=false → native が [] → auto mode 不可（期待動作）。
+    // enterprise は native が正常にフィルタした結果を返す。
+    // copilotUser=null による Mgn 権限フィルタ失敗が MODEL-001 の真因 → AUTH-001 解決後に評価。
     if (typeof result.modelsFilterToPicker === 'function') {
       const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(modelsJson) {
         const nativeResult = _nativeModelsFilterToPicker(modelsJson);
         _dbg('modelsFilterToPicker', { nativeResult, modelCount: (() => { try { return JSON.parse(modelsJson).length; } catch(_) { return -1; } })() });
-        if (Array.isArray(nativeResult) && nativeResult.length > 0) return nativeResult;
-        try {
-          const models = JSON.parse(modelsJson);
-          if (!Array.isArray(models)) return [];
-          const allowed = models.reduce((acc, m, i) => {
-            if (!m.policy || m.policy.state !== 'disabled') acc.push(i);
-            return acc;
-          }, []);
-          return allowed.length > 0 ? allowed : models.map((_, i) => i);
-        } catch(_) { return []; }
+        return nativeResult;
       };
     }
     // authGetCopilotApiUrl: type=token/env/user/gh-cli/api-key では native が null を返す。
