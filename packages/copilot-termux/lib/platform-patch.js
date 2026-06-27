@@ -151,6 +151,7 @@ Module._load = function (request, parent, isMain) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
         const baseUrl = process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
+        _dbg('capiClientListModels:fetch', { baseUrl });
         let res;
         try {
           res = await globalThis.fetch(`${baseUrl}/models`, {method: 'GET', headers: authHeaders});
@@ -511,6 +512,7 @@ Module._load = function (request, parent, isMain) {
     async function _buildAuthInfo(token, hostUri) {
       let login = null;
       let copilotUser = null;
+      _dbg('buildAuthInfo:start', { tokenHash: _tokenHash(token), hostUri });
       try {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const res = await globalThis.fetch(`${apiHost}/user`, {
@@ -518,7 +520,10 @@ Module._load = function (request, parent, isMain) {
           signal: AbortSignal.timeout(5000),
         });
         if (res.ok) login = (await res.json()).login;
-      } catch (_) {}
+        _dbg('buildAuthInfo:/user', { status: res.status, login });
+      } catch (e) {
+        _dbg('buildAuthInfo:/user:error', { err: e.message });
+      }
       // copilot_internal/user から copilotUser 全体を取得して authInfo に含める。
       // app.js の Wa(authInfo) は authInfo.copilotUser.endpoints.api から CAPI base URL を導く。
       // copilotUser: null のままでは is_mcp_enabled・quota・plan 情報も失われる。
@@ -534,8 +539,19 @@ Module._load = function (request, parent, isMain) {
           copilotUser = info;
           const apiUrl = info?.endpoints?.api;
           if (apiUrl && typeof apiUrl === 'string') process.env.COPILOT_API_URL = apiUrl;
+          _dbg('buildAuthInfo:/copilot_internal/user', {
+            status: r.status,
+            access_type_sku: info?.access_type_sku ?? null,
+            copilot_plan: info?.copilot_plan ?? null,
+            endpoints_api: apiUrl ?? null,
+            COPILOT_API_URL: process.env.COPILOT_API_URL ?? null,
+          });
+        } else {
+          _dbg('buildAuthInfo:/copilot_internal/user', { status: r.status, ok: false });
         }
-      } catch (_) {}
+      } catch (e) {
+        _dbg('buildAuthInfo:/copilot_internal/user:error', { err: e.message });
+      }
       return JSON.stringify({
         authInfo: { type: 'token', host: hostUri, token, login, copilotUser },
         token,
@@ -552,10 +568,17 @@ Module._load = function (request, parent, isMain) {
           )
         : null) || 'https://github.com').replace(/\/+$/, '');
       if (entry.cachedInfo !== null && (entry.cachedToken !== token || entry.cachedHost !== hostUri)) {
+        _dbg('resolveOrCache:cache-invalidate', {
+          reason: entry.cachedToken !== token ? 'token-changed' : 'host-changed',
+          oldTokenHash: _tokenHash(entry.cachedToken), newTokenHash: _tokenHash(token),
+        });
         entry.cachedInfo = null;
         entry.pendingInfo = null;
       }
-      if (entry.cachedInfo !== null) return entry.cachedInfo;
+      if (entry.cachedInfo !== null) {
+        _dbg('resolveOrCache:cache-hit', { tokenHash: _tokenHash(token) });
+        return entry.cachedInfo;
+      }
       if (!entry.pendingInfo) {
         entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
           entry.cachedInfo = info;
@@ -609,6 +632,14 @@ Module._load = function (request, parent, isMain) {
         try {
           const authInfo = JSON.parse(authInfoJson);
           const hostUri = ((authInfo && authInfo.host) || 'https://github.com').replace(/\/+$/, '');
+          _dbg('authManagerSwitchToAuth', {
+            tokenHash: _tokenHash(token),
+            login: authInfo?.login ?? null,
+            copilotUser_sku: authInfo?.copilotUser?.access_type_sku ?? null,
+            copilotUser_plan: authInfo?.copilotUser?.copilot_plan ?? null,
+            copilotUser_null: authInfo?.copilotUser == null,
+            COPILOT_API_URL: process.env.COPILOT_API_URL ?? null,
+          });
           entry.cachedInfo = JSON.stringify({ authInfo, token: token || null });
           entry.cachedToken = token || null;
           entry.cachedHost = hostUri;
@@ -617,6 +648,7 @@ Module._load = function (request, parent, isMain) {
       }
     };
     result.authManagerLoginUser = async function(uuid, host, login, token) {
+      _dbg('authManagerLoginUser:start', { host, login, tokenHash: _tokenHash(token) });
       const entry = _authMgr.get(uuid);
       if (!entry || !token) return;
       const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
@@ -873,19 +905,38 @@ Module._load = function (request, parent, isMain) {
 // 差し替えるのを阻止する。linuxmusl-arm64/runtime.node の Rust ネットワークスタックは
 // bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
 // GitHub OAuth token via env var or gh CLI (keychain unavailable on bionic)
+// --- AUTH デバッグ計装 ---
+// COPILOT_TERMUX_DEBUG_AUTH=1 を設定すると認証の各ステップを stderr に JSON で出力する。
+// token はセキュリティのため先頭8文字のみ表示。
+const _authDebug = process.env.COPILOT_TERMUX_DEBUG_AUTH === '1';
+function _dbg(event, data) {
+  if (!_authDebug) return;
+  process.stderr.write('[copilot-termux-auth] ' + JSON.stringify({ event, ...data, ts: new Date().toISOString() }) + '\n');
+}
+function _tokenHash(t) { return t ? t.slice(0, 8) + '...' : null; }
+// --- end 計装 ---
+
 async function _readGhToken(env) {
   const envToken =
     (env && (env.GITHUB_TOKEN || env.GH_TOKEN || env.COPILOT_GITHUB_TOKEN)) ||
     process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN;
-  if (envToken) return envToken;
+  if (envToken) {
+    _dbg('readGhToken', { source: 'env', tokenHash: _tokenHash(envToken) });
+    return envToken;
+  }
   try {
     const { execFile } = require('child_process');
-    return await new Promise(resolve => {
+    const ghToken = await new Promise(resolve => {
       execFile('gh', ['auth', 'token'], { encoding: 'utf8', timeout: 5000 }, (err, stdout) => {
         resolve(err ? null : (stdout.trim() || null));
       });
     });
-  } catch (_) { return null; }
+    _dbg('readGhToken', { source: ghToken ? 'gh-cli' : 'null', tokenHash: _tokenHash(ghToken) });
+    return ghToken;
+  } catch (_) {
+    _dbg('readGhToken', { source: 'error', tokenHash: null });
+    return null;
+  }
 }
 
 const _nativeFetch = globalThis.fetch;
