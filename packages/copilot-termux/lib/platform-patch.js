@@ -1070,3 +1070,25 @@ Object.defineProperty(globalThis, 'fetch', {
   get() { return _nativeFetch; },
   set(_) { /* B7 代入を無視 */ },
 });
+
+// UPDATE-001: /update コマンドが @github/copilot の npm install 文字列を出力する問題を修正。
+// app.js 内の WEr() がハードコードする `npm i -g @github/copilot@${version}` を
+// @bash0816/copilot-termux に差し替える。Module._extensions で index.js ロード時にのみ適用。
+const _origJsExtension = Module._extensions['.js'];
+Module._extensions['.js'] = function(mod, filename) {
+  if (typeof filename === 'string' && /[/\\]\.copilot-termux[/\\]current[/\\]index\.js$/.test(filename)) {
+    const origCompile = mod._compile.bind(mod);
+    mod._compile = function(content, _filename) {
+      const PATTERN = /`npm i -g @github\/copilot@\$\{[^}]+\}`/g;
+      const matches = content.match(PATTERN);
+      if (matches && matches.length === 1) {
+        content = content.replace(PATTERN, '`npm install -g @bash0816/copilot-termux`');
+      } else {
+        console.warn('[copilot-termux] UPDATE-001: update string pattern ' +
+          (matches ? 'found ' + matches.length + ' times' : 'not found') + ', skipping patch');
+      }
+      return origCompile(content, _filename);
+    };
+  }
+  return _origJsExtension(mod, filename);
+};
