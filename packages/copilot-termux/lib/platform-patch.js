@@ -109,9 +109,8 @@ Module._load = function (request, parent, isMain) {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
     // modelsFilterToPicker: native-first。native 結果をそのまま返す。
-    // free アカウントは全モデル model_picker_enabled=false → native が [] → auto mode 不可（期待動作）。
-    // enterprise は native が正常にフィルタした結果を返す。
-    // copilotUser=null による Mgn 権限フィルタ失敗が MODEL-001 の真因 → AUTH-001 解決後に評価。
+    // free: 全モデル model_picker_enabled=false → native が [] → auto mode 不可（期待動作）。
+    // Copilot token 修正後に Mgn が正しく権限フィルタするため fallback は不要。
     if (typeof result.modelsFilterToPicker === 'function') {
       const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(modelsJson) {
@@ -137,6 +136,29 @@ Module._load = function (request, parent, isMain) {
         return r;
       };
     }
+    // capiClientPrepareRequestHeaders: native は OAuth token をそのまま Bearer にする。
+    // Copilot 推論 API は Copilot token が必要なため、キャッシュ済み copilotToken で差し替え。
+    if (typeof result.capiClientPrepareRequestHeaders === 'function') {
+      const _nativePrepareRequestHeaders = result.capiClientPrepareRequestHeaders;
+      result.capiClientPrepareRequestHeaders = function(handle, ...args) {
+        const prepared = _nativePrepareRequestHeaders(handle, ...args);
+        // _authMgr から有効な copilotToken を探して Authorization を差し替え
+        const now = Date.now();
+        for (const entry of _authMgr.values()) {
+          if (entry.copilotToken && (entry.copilotTokenExpiry === 0 || entry.copilotTokenExpiry > now)) {
+            if (prepared && Array.isArray(prepared.headers)) {
+              const headers = prepared.headers.map(h =>
+                h.name && h.name.toLowerCase() === 'authorization'
+                  ? { name: h.name, value: `Bearer ${entry.copilotToken}` }
+                  : h
+              );
+              return { ...prepared, headers };
+            }
+          }
+        }
+        return prepared;
+      };
+    }
     // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
     if (typeof result.capiClientListModels === 'function') {
       result.capiClientListModels = async function(handle, _includeHidden, _skipCache, _applyModelLimitCaps, _networkingConfigId) {
@@ -150,11 +172,14 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        const baseUrl = process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
-        _dbg('capiClientListModels:fetch', { baseUrl });
+        // モデルフェッチは account-specific endpoint（権限に合ったモデルリスト取得）
+        // copilotUrl はネイティブが LLM リクエストに使う URL → 1.0.63 同様に標準 endpoint を返す
+        const fetchUrl = process.env.COPILOT_API_URL || 'https://api.githubcopilot.com';
+        const copilotUrl = 'https://api.githubcopilot.com';
+        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl });
         let res;
         try {
-          res = await globalThis.fetch(`${baseUrl}/models`, {method: 'GET', headers: authHeaders});
+          res = await globalThis.fetch(`${fetchUrl}/models`, {method: 'GET', headers: authHeaders});
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: e.message}));
         }
@@ -166,7 +191,7 @@ Module._load = function (request, parent, isMain) {
         const data = await res.json();
         const models = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
-        return {modelsJson: JSON.stringify(models), copilotUrl: baseUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
+        return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
     }
     if (typeof result.sessionSqliteOpen === 'function') {
@@ -564,7 +589,7 @@ Module._load = function (request, parent, isMain) {
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
 
     result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
-      _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0 });
+      _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0, copilotToken: null, copilotTokenExpiry: 0 });
       // native 非呼び出し: tokio runtime 生成を阻止
     };
 
@@ -611,9 +636,32 @@ Module._load = function (request, parent, isMain) {
       } catch (e) {
         _dbg('buildAuthInfo:/copilot_internal/user:error', { err: e.message });
       }
+      // Copilot API token 取得（推論 API は OAuth token を受け付けないため交換が必要）
+      let copilotToken = null;
+      let copilotTokenExpiry = 0;
+      try {
+        const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
+        const t = await globalThis.fetch(`${apiHost}/copilot_internal/v2/token`, {
+          method: 'GET',
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (t.ok) {
+          const td = await t.json();
+          copilotToken = td.token || null;
+          if (td.expires_at) copilotTokenExpiry = Date.parse(td.expires_at);
+          _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null });
+        } else {
+          _dbg('buildAuthInfo:/copilot_internal/v2/token', { status: t.status, ok: false });
+        }
+      } catch (e) {
+        _dbg('buildAuthInfo:/copilot_internal/v2/token:error', { err: e.message });
+      }
       return JSON.stringify({
         authInfo: { type: 'token', host: hostUri, token, login, copilotUser },
         token,
+        copilotToken,
+        copilotTokenExpiry,
       });
     }
 
@@ -708,6 +756,7 @@ Module._load = function (request, parent, isMain) {
         entry.cachedToken = token;
         entry.cachedHost = hostUri;
         entry.pendingInfo = null;
+        try { const p = JSON.parse(info); entry.copilotToken = p.copilotToken || null; entry.copilotTokenExpiry = p.copilotTokenExpiry || 0; } catch(_) {}
         return info;
       }).catch(err => {
         if (entry.gen === gen) entry.pendingInfo = null;
@@ -739,6 +788,7 @@ Module._load = function (request, parent, isMain) {
             _loginTokens.set(`${hostUri}:${parsed.authInfo.login}`, token);
           }
         } catch (_) {}
+        try { const p = JSON.parse(info); entry.copilotToken = p.copilotToken || null; entry.copilotTokenExpiry = p.copilotTokenExpiry || 0; } catch(_) {}
         return info;
       }).catch(err => { if (entry.gen === gen) entry.pendingInfo = null; return null; });
       await entry.pendingInfo; // ensure cachedInfo is set before app.js continues
