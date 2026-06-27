@@ -141,13 +141,12 @@ async function WEr(t, e) {
 ```
 `WEr` 関数（minified）が `npm i -g @github/copilot@<version>` をハードコード。
 
-### 修正方針（Opus 推奨）
-`Module._load` フックで `app.js` のソースコードを限定スコープで置換する：
-- 対象: `~/.copilot-termux/current/index.js`（または同等パス）に限定
-- パターン: `/npm i -g @github\/copilot@\$\{[^}]+\}/`（一点置換）
-- **置換件数 ≠ 1 の場合は無変更 + 警告**（upstream 変化検知を兼ねる）
+### ✅ 修正済み（2026-06-27、commit 6bd05d6）
+
+`Module._extensions['.js']` フックで `~/.copilot-termux/current/index.js` ロード時にのみ適用：
+- パターン: `` /`npm i -g @github\/copilot@\$\{[^}]+\}`/g `` （1件一致のみ置換）
 - 置換後: `` `npm install -g @bash0816/copilot-termux` ``
-- 優先度は Medium のまま、AUTH/MODEL 修正後で問題なし
+- パターン件数 ≠ 1 の場合は警告のみで無変更（upstream 変化検知）
 
 ---
 
@@ -158,13 +157,12 @@ async function WEr(t, e) {
 | AUTH-001 | free↔enterprise切り替えで認証失敗 | Critical | なし | ✅ 修正済み・3-step 実機確認済み |
 | MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | ✅ 修正済み・enterprise 実機確認済み |
 | MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
-| UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | 独立・後回し可 |
+| UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | ✅ 修正済み（commit 6bd05d6） |
 
 ## 残作業
 
-1. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認
-2. **UPDATE-001**: Module._load フックで限定スコープ文字列置換（AUTH/MODEL 完了後）
-3. **npm publish**: MODEL-002 TUI テスト完了 + UPDATE-001 対応後に candidate → latest
+1. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認（ユーザー作業）
+2. **npm publish**: MODEL-002 TUI テスト完了後に `npm-package.yml` を candidate タグで trigger → ユーザー承認 → latest
 
 ---
 
