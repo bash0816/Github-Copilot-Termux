@@ -544,10 +544,10 @@ Module._load = function (request, parent, isMain) {
       return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
     };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
-    const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost }
+    const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
 
     result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
-      _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null });
+      _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0 });
       // native 非呼び出し: tokio runtime 生成を阻止
     };
 
@@ -622,7 +622,9 @@ Module._load = function (request, parent, isMain) {
         return entry.cachedInfo;
       }
       if (!entry.pendingInfo) {
+        const gen = entry.gen;
         entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+          if (entry.gen !== gen) return info; // stale: a newer switch superseded this fetch
           entry.cachedInfo = info;
           entry.cachedToken = token;
           entry.cachedHost = hostUri;
@@ -636,7 +638,7 @@ Module._load = function (request, parent, isMain) {
           } catch (_) {}
           return info;
         }).catch(err => {
-          entry.pendingInfo = null;
+          if (entry.gen === gen) entry.pendingInfo = null;
           throw err;
         });
       }
@@ -666,13 +668,14 @@ Module._load = function (request, parent, isMain) {
     result.authManagerGetLastAuthErrors = function(uuid) { return []; };
     result.authManagerClearCache = function(uuid) {
       const e = _authMgr.get(uuid);
-      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
+      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; }
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
       if (!entry) return;
       // Clear stale enterprise endpoint and cache regardless of token presence
       delete process.env.COPILOT_API_URL;
+      const gen = ++entry.gen;
       entry.cachedInfo = null;
       entry.cachedToken = null;
       entry.cachedHost = null;
@@ -683,12 +686,16 @@ Module._load = function (request, parent, isMain) {
         catch (_) { return 'https://github.com'; }
       })();
       entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+        if (entry.gen !== gen) return info; // stale: a newer switch superseded this fetch
         entry.cachedInfo = info;
         entry.cachedToken = token;
         entry.cachedHost = hostUri;
         entry.pendingInfo = null;
         return info;
-      }).catch(() => { entry.pendingInfo = null; });
+      }).catch(err => {
+        if (entry.gen === gen) entry.pendingInfo = null;
+        _dbg('authManagerSwitchToAuth:error', { err: err.message });
+      });
       await entry.pendingInfo;
       _dbg('authManagerSwitchToAuth:done', {
         tokenHash: _tokenHash(token), hostUri,
@@ -701,7 +708,9 @@ Module._load = function (request, parent, isMain) {
       if (!entry || !token) return;
       const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
       _loginTokens.set(`${hostUri}:${login || ''}`, token);
+      const gen = ++entry.gen;
       entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+        if (entry.gen !== gen) return info; // stale: a newer switch superseded this fetch
         entry.cachedInfo = info;
         entry.cachedToken = token;
         entry.cachedHost = hostUri;
@@ -714,7 +723,7 @@ Module._load = function (request, parent, isMain) {
           }
         } catch (_) {}
         return info;
-      }).catch(err => { entry.pendingInfo = null; return null; });
+      }).catch(err => { if (entry.gen === gen) entry.pendingInfo = null; return null; });
       await entry.pendingInfo; // ensure cachedInfo is set before app.js continues
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
