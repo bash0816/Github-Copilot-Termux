@@ -387,6 +387,7 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.anthropicMessageStreamAccumulatorFinish === 'function') {
       result.anthropicMessageStreamAccumulatorFinish = function(id) {
         const acc = _jsAccs.get(id) || { message: null };
+        _dbg('accumulatorFinish', { id, message: acc.message ? { stop_reason: acc.message.stop_reason, contentTypes: (acc.message.content||[]).map(b=>b.type+':'+(b.text||'').slice(0,30)) } : null });
         _jsAccs.delete(id);
         return { json: JSON.stringify({ message: acc.message }) };
       };
@@ -402,6 +403,7 @@ Module._load = function (request, parent, isMain) {
     // 4. modelHttpStreamStart → fetch full SSE body, parse events
     result.modelHttpStreamStart = async function(jsonArg) {
       const req = JSON.parse(jsonArg);
+      _dbg('modelHttpStreamStart', { url: req.url, method: req.method });
       let body = req.body;
       if (body !== null && body !== undefined && typeof body === 'object') {
         if (body.type === 'Buffer' && Array.isArray(body.data)) {
@@ -427,11 +429,41 @@ Module._load = function (request, parent, isMain) {
         return { json: JSON.stringify({ bodyText, status: res.status, statusText: res.statusText, headers, streamId: null }) };
       }
       const events = _parseAnthropicSSE(bodyText);
+      _dbg('modelHttpStreamStart:parsed', { status: res.status, eventCount: events.length, bodySnippet: bodyText.slice(0, 300) });
       const finalMessage = _reconstructFinalMessage(events);
       const streamId = 'js-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       _jsStreams.set(streamId, { events, index: 0, finalMessage });
       return { json: JSON.stringify({ bodyText: null, status: res.status, statusText: res.statusText, headers, streamId }) };
     };
+
+    // Helper: convert Anthropic SSE event → chunkContext for processAnthropicStreamingChunkContext
+    function _toChunkContext(event, streamId) {
+      const base = { content: '', size: 0, chunkBoundary: false, messageStart: false, streamingId: streamId };
+      if (!event || !event.type) return base;
+      switch (event.type) {
+        case 'message_start':
+          return { ...base, messageStart: true };
+        case 'content_block_delta': {
+          const d = event.delta;
+          if (!d) return base;
+          if (d.type === 'text_delta') {
+            const t = d.text || '';
+            return { ...base, content: t, size: Buffer.byteLength(t, 'utf8') };
+          }
+          if (d.type === 'thinking_delta') {
+            const r = d.thinking || '';
+            return { ...base, reasoningContent: r, size: Buffer.byteLength(r, 'utf8') };
+          }
+          return base;
+        }
+        case 'content_block_stop':
+        case 'message_delta':
+        case 'message_stop':
+          return { ...base, chunkBoundary: true };
+        default:
+          return base;
+      }
+    }
 
     // 5. modelHttpStreamNextAnthropicMessageEvent → yield events one by one
     result.modelHttpStreamNextAnthropicMessageEvent = async function(streamId, accId) {
@@ -444,7 +476,10 @@ Module._load = function (request, parent, isMain) {
         }
         return null;
       }
-      return { json: JSON.stringify({ kind: 'ok', processResult: { event: st.events[st.index++] } }) };
+      const event = st.events[st.index++];
+      const chunkContext = _toChunkContext(event, streamId);
+      const tokenEvent = event.type === 'content_block_delta' && !!(event.delta && event.delta.type === 'text_delta');
+      return { json: JSON.stringify({ kind: 'ok', processResult: { event, chunkContext, tokenEvent, copilotUsage: null } }) };
     };
 
     // 6. modelHttpStreamCancel → cleanup
@@ -489,6 +524,7 @@ Module._load = function (request, parent, isMain) {
       if (!st) {
         throw new Error(`Native mod HTTP stream was not found: ${streamId}`);
       }
+      _dbg('responsesStreamDrive:start', { streamId, eventCount: st.events.length, hasProcessors, sample: st.events.slice(0,2) });
       _jsStreams.delete(streamId);
       let copilotUsage = null;
       for (const event of st.events) {
@@ -499,6 +535,7 @@ Module._load = function (request, parent, isMain) {
         if (parsed && parsed.copilotUsage !== undefined && parsed.copilotUsage !== null)
           copilotUsage = parsed.copilotUsage;
         const cc = parsed && parsed.chunkContext;
+        _dbg('responsesStreamDrive:chunk', { eventType: event.type, cc: cc ? { content: cc.content, size: cc.size, messageStart: !!cc.messageStart, chunkBoundary: !!cc.chunkBoundary } : null });
         if (hasProcessors && typeof onChunkCallback === 'function' && cc &&
             (cc.content || cc.messageStart || cc.reportIntentArguments || cc.chunkBoundary || cc.size > 0)) {
           try { onChunkCallback(JSON.stringify(cc)); } catch (_) {}
