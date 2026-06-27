@@ -85,10 +85,11 @@ jobs:
 
           AUDIT_JSON=$(node scripts/napi-audit.js "$RUNTIME" "$NEW_VERSION" --auto-patch)
 
+          DELIMITER="NAPI_AUDIT_$(head -c 8 /dev/urandom | xxd -p)"
           {
-            echo "audit_result<<NAPI_AUDIT_EOF"
+            echo "audit_result<<${DELIMITER}"
             printf '%s\n' "$AUDIT_JSON"
-            echo "NAPI_AUDIT_EOF"
+            echo "${DELIMITER}"
           } >> "$GITHUB_OUTPUT"
 
           UNKNOWN_COUNT=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.newUnknown.length))" "$AUDIT_JSON")
