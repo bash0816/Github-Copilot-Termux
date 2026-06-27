@@ -101,7 +101,11 @@ AUTH-001 の解決（copilotUser 安定化）が前提。その後：
 - native が空（`[]`）かつ copilotUser が健全（access_type_sku/copilot_plan あり）の場合のみ全 index fallback を許容
 - **copilotUser 欠落時は全 index fallback せず、native 空を尊重 + 警告ログ**（権限外漏洩を防ぐ）
 
-> `model_picker_enabled=false 問題` は 1.0.63 時点の API 挙動に基づく観測。現行 API での再検証が必須。
+> **2026-06-27 実測確認**: free アカウント（`free_limited_copilot`/`individual`）では API が返す全 29 モデルが `model_picker_enabled=false`。
+> native `modelsFilterToPicker` は受け取った 16 モデルを全除外する。
+> enterprise アカウントでは `model_picker_enabled=true` のモデルが返るはずで、native が正常動作する。
+> → free アカウントでの「Auto-mode unavailable」は期待動作（使えるモデルがない）。
+> → `modelsFilterToPicker` に native-first（fallback なし）を適用すると free でさらに明確になる。
 
 ---
 
