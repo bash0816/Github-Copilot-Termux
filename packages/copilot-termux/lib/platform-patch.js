@@ -109,10 +109,9 @@ Module._load = function (request, parent, isMain) {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
     // modelsFilterToPicker: native-first。native が空のとき（model_picker_enabled=true のモデルが
-    // 全くない場合）のみ全インデックス fallback。
-    // free アカウントでは全モデルが model_picker_enabled=false → native 空 → fallback で全通し
-    //（auto モードが enterprise 向けモデルを選んで 400 になる副作用は AUTH-001 解決後に再評価）。
-    // enterprise アカウントでは native が正しくフィルタする。
+    // 全くない場合）のみ policy フィルタ付き fallback。
+    // free アカウントでは全モデルが model_picker_enabled=false → native 空 → fallback 発動。
+    // Fix 1 (MODEL-001): fallback で policy.state=disabled モデルを除外して auto が 400 になるのを防ぐ。
     if (typeof result.modelsFilterToPicker === 'function') {
       const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(modelsJson) {
@@ -121,7 +120,12 @@ Module._load = function (request, parent, isMain) {
         if (Array.isArray(nativeResult) && nativeResult.length > 0) return nativeResult;
         try {
           const models = JSON.parse(modelsJson);
-          return Array.isArray(models) ? models.map((_, i) => i) : [];
+          if (!Array.isArray(models)) return [];
+          const allowed = models.reduce((acc, m, i) => {
+            if (!m.policy || m.policy.state !== 'disabled') acc.push(i);
+            return acc;
+          }, []);
+          return allowed.length > 0 ? allowed : models.map((_, i) => i);
         } catch(_) { return []; }
       };
     }
@@ -412,6 +416,17 @@ Module._load = function (request, parent, isMain) {
           body = JSON.stringify(body);
         }
       }
+      // Fix 2 (MODEL-001): /responses 以外は reasoning_effort を除去（/v1/messages 等が 400 になるのを防ぐ）
+      if (body && req.url && !req.url.includes('/responses')) {
+        try {
+          const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+          if (parsed && 'reasoning_effort' in parsed) {
+            delete parsed.reasoning_effort;
+            body = JSON.stringify(parsed);
+            _dbg('modelHttpStreamStart:stripped_reasoning_effort', { url: req.url });
+          }
+        } catch(_) {}
+      }
       let res;
       try {
         res = await globalThis.fetch(req.url, {
@@ -497,6 +512,17 @@ Module._load = function (request, parent, isMain) {
         } else {
           body = JSON.stringify(body);
         }
+      }
+      // Fix 2 (MODEL-001): /responses 以外は reasoning_effort を除去
+      if (body && req.url && !req.url.includes('/responses')) {
+        try {
+          const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+          if (parsed && 'reasoning_effort' in parsed) {
+            delete parsed.reasoning_effort;
+            body = JSON.stringify(parsed);
+            _dbg('modelHttpRequest:stripped_reasoning_effort', { url: req.url });
+          }
+        } catch(_) {}
       }
       let res;
       try {
