@@ -108,12 +108,17 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
-    // modelsFilterToPicker: model_picker_enabled=false のモデルを全部除外してしまう。
-    // GitHub Copilot API は現在全モデルに model_picker_enabled=false を返すため、
-    // modelListCache が空になり m2() の fallback が null を返して "Auto-mode unavailable" になる。
-    // → 全インデックスを返して全モデルを modelListCache に含める。
+    // modelsFilterToPicker: native-first。native が空のとき（model_picker_enabled=true のモデルが
+    // 全くない場合）のみ全インデックス fallback。
+    // free アカウントでは全モデルが model_picker_enabled=false → native 空 → fallback で全通し
+    //（auto モードが enterprise 向けモデルを選んで 400 になる副作用は AUTH-001 解決後に再評価）。
+    // enterprise アカウントでは native が正しくフィルタする。
     if (typeof result.modelsFilterToPicker === 'function') {
+      const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(modelsJson) {
+        const nativeResult = _nativeModelsFilterToPicker(modelsJson);
+        _dbg('modelsFilterToPicker', { nativeResult, modelCount: (() => { try { return JSON.parse(modelsJson).length; } catch(_) { return -1; } })() });
+        if (Array.isArray(nativeResult) && nativeResult.length > 0) return nativeResult;
         try {
           const models = JSON.parse(modelsJson);
           return Array.isArray(models) ? models.map((_, i) => i) : [];
