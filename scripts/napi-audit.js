@@ -129,9 +129,17 @@ function maybeAutoPatch(rootDir, updates) {
 
   const tokioPatched = patchTokioPattern(platformPatchPath, updates.newTokio);
   const gitPatched = patchGitAsyncStubs(platformPatchPath, updates.newGitAsync);
-  const configPatched = updateKnownExportsConfig(configPath, updates);
 
-  return tokioPatched || gitPatched || configPatched || Boolean(updates.newTokio.length || updates.newGitAsync.length || updates.newUnknown.length);
+  // platform-patch.js への反映に成功した分のみ config に記録する
+  // 失敗した場合に config へ記録すると次回監査で「既知」と誤判定されるため
+  const configUpdates = {
+    newTokio: tokioPatched ? updates.newTokio : [],
+    newGitAsync: gitPatched ? updates.newGitAsync : [],
+    newUnknown: updates.newUnknown,
+  };
+  const configPatched = updateKnownExportsConfig(configPath, configUpdates);
+
+  return tokioPatched || gitPatched || configPatched;
 }
 
 function main() {
@@ -150,8 +158,7 @@ function main() {
   const config = readJson(configPath);
   const candidates = extractCandidates(runtimePath);
   const updates = classifyCandidates(candidates, config);
-  if (autoPatch) maybeAutoPatch(rootDir, updates);
-  const patchApplied = autoPatch;
+  const patchApplied = autoPatch ? maybeAutoPatch(rootDir, updates) : false;
 
   const summary = {
     candidateCount: candidates.length,
