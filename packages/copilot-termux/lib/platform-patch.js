@@ -670,24 +670,30 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
-      if (entry && authInfoJson) {
-        try {
-          const authInfo = JSON.parse(authInfoJson);
-          const hostUri = ((authInfo && authInfo.host) || 'https://github.com').replace(/\/+$/, '');
-          _dbg('authManagerSwitchToAuth', {
-            tokenHash: _tokenHash(token),
-            login: authInfo?.login ?? null,
-            copilotUser_sku: authInfo?.copilotUser?.access_type_sku ?? null,
-            copilotUser_plan: authInfo?.copilotUser?.copilot_plan ?? null,
-            copilotUser_null: authInfo?.copilotUser == null,
-            COPILOT_API_URL: process.env.COPILOT_API_URL ?? null,
-          });
-          entry.cachedInfo = JSON.stringify({ authInfo, token: token || null });
-          entry.cachedToken = token || null;
-          entry.cachedHost = hostUri;
-          entry.pendingInfo = null;
-        } catch (_) {}
-      }
+      if (!entry) return;
+      // Clear stale enterprise endpoint and cache regardless of token presence
+      delete process.env.COPILOT_API_URL;
+      entry.cachedInfo = null;
+      entry.cachedToken = null;
+      entry.cachedHost = null;
+      entry.pendingInfo = null;
+      if (!token) return;
+      const hostUri = (() => {
+        try { return (JSON.parse(authInfoJson)?.host || 'https://github.com').replace(/\/+$/, ''); }
+        catch (_) { return 'https://github.com'; }
+      })();
+      entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
+        entry.cachedInfo = info;
+        entry.cachedToken = token;
+        entry.cachedHost = hostUri;
+        entry.pendingInfo = null;
+        return info;
+      }).catch(() => { entry.pendingInfo = null; });
+      await entry.pendingInfo;
+      _dbg('authManagerSwitchToAuth:done', {
+        tokenHash: _tokenHash(token), hostUri,
+        COPILOT_API_URL_after: process.env.COPILOT_API_URL ?? null,
+      });
     };
     result.authManagerLoginUser = async function(uuid, host, login, token) {
       _dbg('authManagerLoginUser:start', { host, login, tokenHash: _tokenHash(token) });
