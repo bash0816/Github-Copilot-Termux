@@ -26,13 +26,13 @@ node scripts/napi-audit.js ~/.copilot-termux/current/runtime.node 1.0.66
 | カテゴリ | 判定条件 | 対応 |
 |---|---|---|
 | tokio_noop_prefixes | `modelHttp*` や `networkFetch*` のように tokio 系の命名規則に乗る | no-op 化して落ちないようにする |
-| git_async_stubs | `git[A-Z].*Async` に一致する | `async () => null` などの安全な JS スタブに置換する |
+| pending_git_async_stubs | `git[A-Z].*Async` に一致する | `pending_git_async_stubs` に追記（手動レビュー後に `git_async_stubs` に昇格） |
 | behavioral_stubs | tokio / git ではないが、app.js の期待値に合わせた戻り値が必要 | app.js を読んで手動実装する |
 | stream_pipeline_risk | `modelHttpStreamStart` / `modelHttpStreamNextAnthropicMessageEvent` / `modelHttpStreamCancel` / `responsesStreamDrive` | ストリーム経路のため自動パッチ対象外、必ず手動確認する |
 
 ### Step 3: カテゴリ別の対応
 
-- `TOKIO_PATTERN` と `git*Async` は自動更新できる
+- `TOKIO_PATTERN` は自動更新。`git*Async` は `pending_git_async_stubs` に追記（`platform-patch.js` は自動更新しない）
 - `behavioral_stubs` は手動で app.js を読んで戻り値・構造を合わせる
 - `stream_pipeline_risk` は `processResult` の構造差分が壊れやすいので、自動化しない
 
@@ -107,7 +107,7 @@ node scripts/napi-audit.js ~/.copilot-termux/current/runtime.node 1.0.66 --auto-
 出力 JSON の各フィールドの意味:
 
 - `newTokio`: `tokio_noop_prefixes` に一致したが、まだ known set にない候補
-- `newGitAsync`: `git[A-Z].*Async` に一致した新しい候補
+- `newPendingGitAsync`: `git[A-Z].*Async` に一致した新しい候補（手動レビュー待ち）
 - `newUnknown`: 上記以外で、長さ 15 文字以上の未分類候補
 - `patchApplied`: `--auto-patch` 実行時にパッチ処理を走らせたかどうか
 - `version`: 監査対象として渡した Copilot バージョン
@@ -118,7 +118,7 @@ node scripts/napi-audit.js ~/.copilot-termux/current/runtime.node 1.0.66 --auto-
 | 操作 | 自動化 | 理由 |
 |------|--------|------|
 | `TOKIO_PATTERN` に新プレフィックス追加 | 可 | no-op は常に安全 |
-| `git*Async` に `async () => null` 追加 | 可 | git 系は null / 空で安全に倒せる |
+| `git*Async` を `pending_git_async_stubs` に追記 | 可（手動レビュー必須） | 戻り値型が様々なため自動スタブ化は危険 |
 | behavioral stub の追加・修正 | 不可 | app.js の期待値確認が必須 |
 | 既存スタブの削除 | 不可 | 破壊的変更 |
 

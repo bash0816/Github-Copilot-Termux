@@ -1,9 +1,8 @@
 # Known Bugs — 未解決バグ一覧
 
-> **記録日**: 2026-06-27  
+> **記録日**: 2026-06-27（最終更新: 2026-06-27）  
 > **Opus レビュー**: 2026-06-27 実施済み  
-> **状態**: 1.0.64 対応コードはコミット済みだが、以下のバグにより npm publish をスキップ。  
-> 1.0.65 リリース前に修正が必要。
+> **状態**: AUTH-001 修正済み・enterprise 実機確認済み。MODEL-002 TUI テスト待ち。UPDATE-001 独立対応待ち。
 
 ---
 
@@ -44,30 +43,22 @@ AUTH-001 → copilotUser 不安定 → MODEL-001/002 の連鎖。AUTH-001 の解
 > **注意**: token だけで切替を検知できない。free/enterprise ともに host=`https://github.com` で不変なので `cachedHost` は無力。
 > env token が固定の場合、token も不変になり得るため token 比較だけでは切替を検知できない。
 
-### 修正方針（Opus 確認済み）
-`authManagerSwitchToAuth` でキャッシュクリアするだけでは**不十分**。
-切替時に以下の両方が必要：
+### ✅ 修正済み（2026-06-27）
+
+`authManagerSwitchToAuth` を以下の方針で修正・コミット済み（commit 1d4ac59）：
 1. `process.env.COPILOT_API_URL` をクリア
 2. `/copilot_internal/user` を再 fetch して copilotUser を更新
 
-### 調査手順（計装ファースト）
+また `/copilot_internal/v2/token` 経由の Copilot token 交換も追加（commit 8d18381）。
+enterprise アカウントでは v2/token が 200 を返す場合があり、推論 API に必要。
 
-**Step 1: デバッグ計装を追加**（`COPILOT_TERMUX_DEBUG_AUTH=1` で stderr に JSON 1行）
-- `_readGhToken`: token hash 先頭8桁 + source(`env`/`gh`/`null`)
-- `_buildAuthInfo`: hostUri、`/user` status+login、`/copilot_internal/user` status、`access_type_sku`、`copilot_plan`、`endpoints.api`
-- `_resolveOrCache`: uuid、cache hit/miss、cachedToken hash、新 token hash
-- `authManagerLoginUser`: login 引数、成功/失敗、失敗時 cachedInfo の残存有無
-- `capiClientListModels`: 使用 baseUrl、models 件数
+### 3-step 実機確認（2026-06-27）
 
-**Step 2: 4パターンで再現**（候補の切り分け）
-1. env token **なし** + `gh auth switch` で free→enterprise→free（候補2 を除外/確定）
-2. `GITHUB_TOKEN` **固定あり** + `gh auth switch`（候補2 を確定）
-3. `GITHUB_TOKEN` を free/enterprise で**明示変更**
-4. enterprise で `/copilot_internal/user` が**失敗する** scope 条件（候補1 を確定）
-
-**Step 3: 判定基準**
-切替直後に **token hash・login・copilotUser・COPILOT_API_URL が同一アカウント由来で揃うか**。
-一つでも旧値なら共通根が確定。
+| ステップ | アカウント | 結果 |
+|---------|----------|------|
+| 1 | bash0816 (free) | "Auto-mode unavailable" ✓（期待動作） |
+| 2 | yterai-ehc (enterprise) | claude-sonnet-4.6 で `copilot -p "1+1は"` → 成功 ✓ |
+| 3 | bash0816 (free) に戻す | "Auto-mode unavailable" ✓（COPILOT_API_URL が正しくリセット） |
 
 ---
 
@@ -95,17 +86,16 @@ return { models: l_o(p), unfilteredModels: p, ... }
 **真の原因**: `copilotUser`（`access_type_sku` / `copilot_plan`）が null / 古い / 別アカウント由来になり、`Mgn` が権限フィルタできない。
 `modelsFilterToPicker` の pass-through stub は**副次要因**（picker 非対象が混ざるだけ）。
 
-### 修正方針
-AUTH-001 の解決（copilotUser 安定化）が前提。その後：
-- native `modelsFilterToPicker` を native-first で呼び出す
-- native が空（`[]`）かつ copilotUser が健全（access_type_sku/copilot_plan あり）の場合のみ全 index fallback を許容
-- **copilotUser 欠落時は全 index fallback せず、native 空を尊重 + 警告ログ**（権限外漏洩を防ぐ）
+### ✅ 修正済み（2026-06-27）
 
-> **2026-06-27 実測確認**: free アカウント（`free_limited_copilot`/`individual`）では API が返す全 29 モデルが `model_picker_enabled=false`。
-> native `modelsFilterToPicker` は受け取った 16 モデルを全除外する。
-> enterprise アカウントでは `model_picker_enabled=true` のモデルが返るはずで、native が正常動作する。
-> → free アカウントでの「Auto-mode unavailable」は期待動作（使えるモデルがない）。
-> → `modelsFilterToPicker` に native-first（fallback なし）を適用すると free でさらに明確になる。
+AUTH-001 解決後に実施（commits 9604a52, 01bae51）：
+- `modelsFilterToPicker` を native-first（fallback なし）に変更
+- 権限外モデルフィルタ（`Mgn`）が copilotUser 安定化後に正常動作
+
+### 実機確認（2026-06-27）
+
+- free アカウント: 全モデル `model_picker_enabled=false` → `[]` → "Auto-mode unavailable"（期待動作）
+- enterprise アカウント `yterai-ehc`: 8 モデルが picker 有効 → `copilot -p "1+1は"` → claude-sonnet-4.6 で正常動作 ✓
 
 ---
 
@@ -119,7 +109,11 @@ AUTH-001 の解決（copilotUser 安定化）が前提。その後：
 
 ### 原因
 AUTH-001 と連動。copilotUser が null になると権限情報が欠落する。
-AUTH-001 修正後に再評価する。
+AUTH-001 修正済み。
+
+### 現状
+`-p` モード（新プロセス）では AUTH-001 修正後に正常動作を確認。
+TUI モードの `/login` コマンド + アカウント切り替えは未確認。
 
 ---
 
@@ -161,20 +155,19 @@ async function WEr(t, e) {
 
 | ID | 内容 | 重要度 | 修正前提 | 状態 |
 |-----|------|--------|----------|------|
-| AUTH-001 | free↔enterprise切り替えで認証失敗 | Critical | なし | 計装→再現待ち |
-| MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | AUTH-001 解決後に着手 |
-| MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | AUTH-001 解決後に再評価 |
+| AUTH-001 | free↔enterprise切り替えで認証失敗 | Critical | なし | ✅ 修正済み・3-step 実機確認済み |
+| MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | ✅ 修正済み・enterprise 実機確認済み |
+| MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
 | UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | 独立・後回し可 |
 
-## 推奨対応順序
+## 残作業
 
-1. **AUTH-001 計装** → デバッグログで根本原因を特定（enterprise 実機テスト環境が必要）
-2. **AUTH-001 修正**: COPILOT_API_URL クリア + copilotUser 再 fetch を切替時に実装
-3. **MODEL-001**: copilotUser 安定化後に modelsFilterToPicker を native-first 化（現行 API での model_picker_enabled=false 再検証を含む）
-4. **MODEL-002**: AUTH-001 修正後に再評価
-5. **UPDATE-001**: Module._load フックで限定スコープ文字列置換
+1. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認
+2. **UPDATE-001**: Module._load フックで限定スコープ文字列置換（AUTH/MODEL 完了後）
+3. **npm publish**: MODEL-002 TUI テスト完了 + UPDATE-001 対応後に candidate → latest
 
 ---
 
-> **1.0.65 での確認状況**: 上記バグが 1.0.65 でも発生するかは未確認。  
-> 実機スモークテスト（enterprise アカウントでの認証含む）が必須。
+> **1.0.65 対応状況（2026-06-27）**:  
+> AUTH-001・MODEL-001 修正済み。enterprise `-p` モード動作確認済み。  
+> TUI モードの MODEL-002 確認と UPDATE-001 対応が残。
