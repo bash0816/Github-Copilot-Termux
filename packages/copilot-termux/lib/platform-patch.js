@@ -109,14 +109,40 @@ Module._load = function (request, parent, isMain) {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
     // modelsFilterToPicker: native-first。native 結果をそのまま返す。
-    // free: 全モデル model_picker_enabled=false → native が [] → auto mode 不可（期待動作）。
-    // Copilot token 修正後に Mgn が正しく権限フィルタするため fallback は不要。
+    // Free/Student: 2026-06-24 から model picker 廃止。全モデル model_picker_enabled=false → native が [] → auto mode のみ。
+    // policy.state=enabled の fallback は model_picker_enabled=false のモデルを picker に出し 400 を招くため廃止。
+    // Enterprise: native が非空インデックス配列を返す → そのまま使用。
     if (typeof result.modelsFilterToPicker === 'function') {
       const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(modelsJson) {
         const nativeResult = _nativeModelsFilterToPicker(modelsJson);
-        _dbg('modelsFilterToPicker', { nativeResult, modelCount: (() => { try { return JSON.parse(modelsJson).length; } catch(_) { return -1; } })() });
+        _dbg('modelsFilterToPicker', { nativeCount: Array.isArray(nativeResult) ? nativeResult.length : -1 });
         return nativeResult;
+      };
+    }
+    // modelResolverFirstAvailableDefaultFromOrder: native は JS-side capiClientListModels を
+    // 知らないため、モデルリストが空の状態で呼ばれると null を返す（Free で発生）。
+    // JS fallback: _modelListCache に goldeneye-free-auto が存在する場合のみ返す。
+    // 汎用 policyEnabled fallback は model_picker_enabled=false のモデルを選び 400 を招くため不使用。
+    if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
+      const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
+      result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
+        const r = _nativeModelResolver(authInfoJson, isGptEnabled);
+        if (r != null) return r;
+        if (!_modelListCache || _modelListCache.length === 0) {
+          _dbg('modelResolver:fallback', { reason: 'no-cache' });
+          return null;
+        }
+        const auto = _modelListCache.find(m =>
+          m && m.id === 'goldeneye-free-auto' &&
+          m.policy && m.policy.state === 'enabled'
+        );
+        if (auto) {
+          _dbg('modelResolver:fallback', { chosen: 'goldeneye-free-auto', from: 'auto-model' });
+          return auto.id;
+        }
+        _dbg('modelResolver:fallback', { reason: 'no-auto-model' });
+        return null;
       };
     }
     // authGetCopilotApiUrl: type=token/env/user/gh-cli/api-key では native が null を返す。
@@ -172,8 +198,8 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        // /models fetch は常に標準 CAPI（enterprise proxy URL では 421 になるため）
-        // copilotUrl（推論エンドポイント）は標準 CAPI 固定（enterprise proxy 検証後に変更検討）
+        // /models fetch は常に標準 CAPI（Enterprise proxy URL では 421 になるため固定）。
+        // copilotUrl（推論エンドポイント）も標準 CAPI 固定（ce7199a で Enterprise 動作確認済み）。
         const fetchUrl = 'https://api.githubcopilot.com';
         const copilotUrl = 'https://api.githubcopilot.com';
         _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl });
@@ -189,7 +215,9 @@ Module._load = function (request, parent, isMain) {
           throw new Error(JSON.stringify({kind: 'http', status: res.status, statusText: res.statusText, body, headers: hdrs, hasRequestId: res.headers.has('x-request-id')}));
         }
         const data = await res.json();
-        const models = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
+        const raw = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
+        const models = Array.isArray(raw) ? raw : [];
+        _modelListCache = models;
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
@@ -587,6 +615,7 @@ Module._load = function (request, parent, isMain) {
     };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
+    let _modelListCache = null; // capiClientListModels が取得したモデルリストキャッシュ（modelResolver fallback 用）
 
     result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
       _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0, copilotToken: null, copilotTokenExpiry: 0 });
@@ -739,13 +768,14 @@ Module._load = function (request, parent, isMain) {
     result.authManagerGetLastAuthErrors = function(uuid) { return []; };
     result.authManagerClearCache = function(uuid) {
       const e = _authMgr.get(uuid);
-      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; }
+      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
       if (!entry) return;
-      // Clear stale enterprise endpoint and cache regardless of token presence
+      // Clear stale enterprise endpoint, model cache, and auth cache regardless of token presence
       delete process.env.COPILOT_API_URL;
+      _modelListCache = null;
       const gen = ++entry.gen;
       entry.cachedInfo = null;
       entry.cachedToken = null;
@@ -782,6 +812,8 @@ Module._load = function (request, parent, isMain) {
       if (!entry || !token) return;
       const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
       _loginTokens.set(`${hostUri}:${login || ''}`, token);
+      _modelListCache = null;
+      delete process.env.COPILOT_API_URL;
       const gen = ++entry.gen;
       entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
         if (entry.gen !== gen) return info; // stale: a newer switch superseded this fetch
@@ -803,7 +835,7 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
       const e = _authMgr.get(uuid);
-      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; }
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
       return true;
     };
     result.authManagerRefreshCopilotUser = async function(uuid) {
