@@ -178,7 +178,7 @@ Module._load = function (request, parent, isMain) {
             }
             return acc;
           }, []);
-          _dbg('modelsFilterToPicker:fallback', { total: models.length, enabled: enabled.length });
+          _dbg('modelsFilterToPicker:fallback', { total: models.length, enabled: enabled.length, enabledIds: enabled.map(i => models[i]?.id) });
           return enabled;
         } catch (_) { return []; }
       };
@@ -212,11 +212,11 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        // fetchUrl/copilotUrl: Free は api.individual.githubcopilot.com（OAuth token で動作）。
-        // Enterprise proxy (api.business.githubcopilot.com) では /models が 421 → 標準 CAPI 固定。
-        // _selectCapiUrl で hostname 完全一致 allowlist により安全に切り替える。
+        // fetchUrl: /models 取得URL。Free は api.individual（COPILOT_API_URL 設定時）、他は標準 CAPI。
+        // copilotUrl: 推論URL。常に標準 CAPI 固定（v1.0.63 と同じ）。
+        // BUG-NEW-2 で copilotUrl=fetchUrl にしたため api.individual への推論が発生していた（副作用修正）。
         const fetchUrl = _selectCapiUrl(process.env.COPILOT_API_URL);
-        const copilotUrl = fetchUrl;
+        const copilotUrl = _DEFAULT_CAPI_URL;
         _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl, COPILOT_API_URL: process.env.COPILOT_API_URL ?? null });
         let res;
         try {
@@ -234,6 +234,9 @@ Module._load = function (request, parent, isMain) {
         const raw = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
         const models = Array.isArray(raw) ? raw : [];
         _dbg('capiClientListModels:result', { status: res.status, modelCount: models.length });
+        _dbg('capiClientListModels:models-sample', models.slice(0, 5).map(m => ({
+          id: m.id, status: m.status, policy: m.policy, expires_at: m.expires_at, deprecation: m.deprecation, model_picker_enabled: m.model_picker_enabled
+        })));
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
