@@ -607,7 +607,7 @@ Module._load = function (request, parent, isMain) {
       try {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const r = await globalThis.fetch(`${apiHost}/copilot_internal/user`, {
-          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': 'copilot-chat' },
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': process.env.GITHUB_COPILOT_INTEGRATION_ID || 'copilot-developer-cli' },
           signal: AbortSignal.timeout(5000),
         });
         if (r.ok) {
@@ -635,7 +635,7 @@ Module._load = function (request, parent, isMain) {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const t = await globalThis.fetch(`${apiHost}/copilot_internal/v2/token`, {
           method: 'GET',
-          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': 'copilot-chat' },
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': process.env.GITHUB_COPILOT_INTEGRATION_ID || 'copilot-developer-cli' },
           signal: AbortSignal.timeout(5000),
         });
         if (t.ok) {
@@ -645,7 +645,7 @@ Module._load = function (request, parent, isMain) {
           _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null });
         } else {
           let body = null;
-          try { body = await t.text(); } catch (_) {}
+          try { const raw = await t.text(); body = raw.length > 500 ? raw.slice(0, 500) + '…' : raw; } catch (_) {}
           _dbg('buildAuthInfo:/copilot_internal/v2/token', { status: t.status, ok: false, body });
         }
       } catch (e) {
