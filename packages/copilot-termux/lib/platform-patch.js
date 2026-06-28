@@ -185,51 +185,57 @@ Module._load = function (request, parent, isMain) {
       };
     }
     // modelsFilterToPicker: native は model_picker_enabled=true のモデルのみ返す。
-    // Free プランは全モデル model_picker_enabled=false → native が [] → auto-only → 400。
-    // フォールバックとして verified allowlist（gpt-4.1 系のみ）のモデルを返す。
-    // Enterprise では native が picker-enabled を返すためフォールバックは発動しない。
-    const _FREE_PICKER_ALLOWLIST = new Set(['gpt-4.1', 'gpt-4.1-2025-04-14']);
+    // Free プランは全モデル model_picker_enabled=false → native が [] を返す。
+    // PICKER-001: fallback に gpt-4o-mini/gpt-4o を返すと TUI /model ピッカーに
+    // ユーティリティモデルが表示されてしまう（公式仕様違反）。
+    // auto モードの default 選択は modelResolverFirstAvailableDefaultFromOrder が担うため
+    // ここでは fallback せず [] を返す。
     if (typeof result.modelsFilterToPicker === 'function') {
       const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
       result.modelsFilterToPicker = function(...args) {
         const nativeResult = _nativeModelsFilterToPicker.apply(this, args);
         if (Array.isArray(nativeResult) && nativeResult.length > 0) return nativeResult;
-        const modelsJson = args[0];
-        try {
-          const models = JSON.parse(modelsJson);
-          if (!Array.isArray(models)) return [];
-          const enabled = models.reduce((acc, m, i) => {
-            const id = m.id || '';
-            if (_FREE_PICKER_ALLOWLIST.has(id) && m.policy && m.policy.state === 'enabled') {
-              acc.push(i);
-            }
-            return acc;
-          }, []);
-          return enabled;
-        } catch (_) { return []; }
+        return [];
       };
     }
     // modelResolverFirstAvailableDefaultFromOrder: native は JS-side capiClientListModels を
     // 知らないため Free では null を返す。
-    // fallback: goldeneye-free-auto（policy.state=enabled）を優先。なければ gpt-4.1 系。
+    // authInfoJson = modelsJson（capiClientListModels と同構造）。_modelListCache null でも参照可能。
+    // fallback: authInfoJson で native r を検証（Enterprise 保護）→ gpt-4o-mini/gpt-4o（Free 修正）。
     if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
       const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
       result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
         const r = _nativeModelResolver(authInfoJson, isGptEnabled);
+        // authInfoJson はモデルリスト JSON。_modelListCache null でも直接検索できる。
+        const _authModels = (() => {
+          try { const v = JSON.parse(authInfoJson); return Array.isArray(v) ? v : null; }
+          catch (_) { return null; }
+        })();
         if (r != null) {
-          // native が非 null を返した場合、現在の _modelListCache と照合する。
-          // アカウント切替後は古い Enterprise モデルが返り得るため、cache にないモデルは採用しない。
-          // cache が null（切替直後で未取得）の場合も native を信頼しない → 下の fallback へ。
+          // native が非 null: authInfoJson で検証（_modelListCache null でも動く・Enterprise 保護）。
+          if (_authModels) {
+            const m = _authModels.find(m => m?.id === r && m?.policy?.state !== 'disabled');
+            if (m) return r;
+          }
+          // authModels になければ _modelListCache でフォールバック検証。
           if (_modelListCache && _modelListCache.length > 0) {
             const enabledIds = new Set(
               _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
             );
             if (enabledIds.has(r)) return r;
-          } else {
           }
           // fall through to cache-based resolver
         }
         if (!_modelListCache || _modelListCache.length === 0) {
+          // _modelListCache 未設定: authInfoJson から GPT fallback（Free 修正）。
+          // Enterprise native が valid model を返す場合は上で return 済み。
+          // isGptEnabled=false でも /chat/completions GPT は利用可能（Free 実機確認済み）。
+          if (_authModels) {
+            for (const id of ['gpt-4o-mini', 'gpt-4o']) {
+              const m = _authModels.find(m => m?.id === id && m?.policy?.state !== 'disabled');
+              if (m) return m.id;
+            }
+          }
           return null;
         }
         const auto = _modelListCache.find(m =>
@@ -239,12 +245,10 @@ Module._load = function (request, parent, isMain) {
         if (auto) {
           return auto.id;
         }
-        const gpt41 = _modelListCache.find(m =>
-          m && (m.id === 'gpt-4.1' || m.id === 'gpt-4.1-2025-04-14') &&
-          m.policy && m.policy.state === 'enabled'
-        );
-        if (gpt41) {
-          return gpt41.id;
+        // GPT fallback（cache あり）: isGptEnabled=false でも GPT 利用可能のため除外しない。
+        for (const id of ['gpt-4o-mini', 'gpt-4o']) {
+          const m = _modelListCache.find(m => m?.id === id && m?.policy?.state !== 'disabled');
+          if (m) return m.id;
         }
         return null;
       };
@@ -760,6 +764,7 @@ Module._load = function (request, parent, isMain) {
       try {
         if (!body) return body;
         const pathname = new URL(url).pathname;
+        // /chat/completions のみを対象にする
         if (!pathname.endsWith('/chat/completions')) return body;
         const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
         if (!parsed || !parsed.model) return body;
@@ -768,9 +773,15 @@ Module._load = function (request, parent, isMain) {
             _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
           );
           if (!enabledIds.has(parsed.model)) {
-            const freeAuto = _modelListCache.find(m => m?.id === 'goldeneye-free-auto' && m?.policy?.state === 'enabled');
-            if (freeAuto) {
-              parsed.model = 'goldeneye-free-auto';
+            // goldeneye-free-auto のみを対象にする
+            const OVERRIDE_CANDIDATES = ['goldeneye-free-auto'];
+            let fallbackModel = null;
+            for (const id of OVERRIDE_CANDIDATES) {
+              const m = _modelListCache.find(m => m?.id === id && m?.policy?.state === 'enabled');
+              if (m) { fallbackModel = id; break; }
+            }
+            if (fallbackModel) {
+              parsed.model = fallbackModel;
               return JSON.stringify(parsed);
             }
           }
