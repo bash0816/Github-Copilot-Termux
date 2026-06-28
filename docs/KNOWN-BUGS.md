@@ -239,6 +239,68 @@ async createModelSession(e) {
 
 ---
 
+## MANIFEST-001: wrapper バージョンと upstream ダウンロード先の不整合
+
+**重要度**: Medium  
+**影響バージョン**: 1.0.65, 1.0.65-1  
+**発見日**: 2026-06-29
+
+### 症状
+
+`@bash0816/copilot-termux@1.0.65`（および `1.0.65-1`）をインストールすると、
+`copilot --version` が `1.0.64` と表示される。
+
+### 根本原因
+
+`config/manifest.json`（upstream のダウンロード先を指定）が `1.0.65` に更新されていない。
+
+```json
+{
+  "copilot": {
+    "package": "@github/copilot-linuxmusl-arm64",
+    "version": "1.0.64"  ← 1.0.65 になっていない
+  }
+}
+```
+
+`github-actions[bot]` による自動バンプ commit（`9444cfe`）が `package.json` のみ更新し、
+`config/manifest.json` の更新を漏らした。
+
+### 影響
+
+- wrapper は `1.0.65-1` と名乗るが、実際には upstream `1.0.64` バイナリを実行している
+- AUTH-001 修正（`platform-patch.js` 側）は upstream バージョンに依存しないため動作に問題なし
+- `copilot --version` 表示が混乱を招く
+
+### 1.0.65 インストール済みユーザーへの対処
+
+現時点では**機能上の問題はない**（wrapper の `platform-patch.js` は upstream バージョンに依存しない）。
+ただし、意図せず 1.0.64 upstream を使っている状態であることをユーザーに知らせる必要がある。
+
+**確認方法**:
+```bash
+cat ~/.copilot-termux/current/package.json | grep '"version"'
+# → "1.0.64" と表示されれば MANIFEST-001 の影響下にある
+```
+
+**暫定回避策**（upstream 1.0.65 を手動インストールしたい場合）:
+```bash
+# upstream を手動で更新（MANIFEST-001 修正前の暫定）
+cd ~/.copilot-termux
+npm install @github/copilot-linuxmusl-arm64@1.0.65
+# ※ setup スクリプトが current を上書きするため、次回 setup 実行で 1.0.64 に戻る点に注意
+```
+
+**恒久対応**: MANIFEST-001 修正版（1.0.65-2 または 1.0.66）を publish 後に `npm install -g @bash0816/copilot-termux@latest` で更新する。
+
+### 修正方針（未実装）
+
+`config/manifest.json` の `version` を `1.0.65` に更新し、
+`@github/copilot-linuxmusl-arm64@1.0.65` の integrity hash を確認して設定する。
+その後 tgz を再ビルドして publish。自動バンプ bot のスクリプトも `manifest.json` を同時更新するよう修正する。
+
+---
+
 ## バグ優先度サマリー
 
 | ID | 内容 | 重要度 | 修正前提 | 状態 |
@@ -248,6 +310,7 @@ async createModelSession(e) {
 | MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
 | UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | ✅ 修正済み（commit 6bd05d6） |
 | BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
+| MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | 🔜 未修正 |
 
 ## 残作業
 
