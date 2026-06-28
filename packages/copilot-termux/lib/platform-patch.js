@@ -149,6 +149,20 @@ Module._load = function (request, parent, isMain) {
       };
     }
     // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
+    // _selectCapiUrl: COPILOT_API_URL が api.individual.githubcopilot.com（Free プラン専用 direct endpoint）の
+    // 場合のみそれを使う。Enterprise proxy URL（api.business.githubcopilot.com 等）では /models が 421 に
+    // なるため標準 CAPI に倒す。hostname 完全一致チェックで SSRF/token 漏洩を防ぐ（GPT-5.5 指摘 #1）。
+    const _DEFAULT_CAPI_URL = 'https://api.githubcopilot.com';
+    const _INDIVIDUAL_CAPI_URL = 'https://api.individual.githubcopilot.com';
+    function _selectCapiUrl(rawApiUrl) {
+      try {
+        const u = new URL(rawApiUrl || _DEFAULT_CAPI_URL);
+        if (u.protocol === 'https:' && u.hostname === 'api.individual.githubcopilot.com') {
+          return _INDIVIDUAL_CAPI_URL;
+        }
+      } catch (_) {}
+      return _DEFAULT_CAPI_URL;
+    }
     if (typeof result.capiClientListModels === 'function') {
       result.capiClientListModels = async function(handle, _includeHidden, _skipCache, _applyModelLimitCaps, _networkingConfigId) {
         let authHeaders;
@@ -161,13 +175,12 @@ Module._load = function (request, parent, isMain) {
         } catch (e) {
           throw new Error(JSON.stringify({kind: 'network', message: `prepareHeaders failed: ${e.message}`}));
         }
-        // /models fetch は常に標準 CAPI（Enterprise proxy URL では 421 になるため固定）。
-        // copilotUrl（推論エンドポイント）も標準 CAPI 固定（ce7199a で Enterprise 動作確認済み）。
-        // Free アカウントは api.individual.githubcopilot.com を /copilot_internal/user で取得するが、
-        // 推論は api.githubcopilot.com 経由でも動作する（Copilot token で認証）。
-        const fetchUrl = 'https://api.githubcopilot.com';
-        const copilotUrl = 'https://api.githubcopilot.com';
-        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl });
+        // fetchUrl/copilotUrl: Free は api.individual.githubcopilot.com（OAuth token で動作）。
+        // Enterprise proxy (api.business.githubcopilot.com) では /models が 421 → 標準 CAPI 固定。
+        // _selectCapiUrl で hostname 完全一致 allowlist により安全に切り替える。
+        const fetchUrl = _selectCapiUrl(process.env.COPILOT_API_URL);
+        const copilotUrl = fetchUrl;
+        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl, COPILOT_API_URL: process.env.COPILOT_API_URL ?? null });
         let res;
         try {
           res = await globalThis.fetch(`${fetchUrl}/models`, {method: 'GET', headers: authHeaders});
@@ -176,12 +189,14 @@ Module._load = function (request, parent, isMain) {
         }
         if (!res.ok) {
           const body = await res.text().catch(() => '');
+          _dbg('capiClientListModels:error', { status: res.status, bodySnippet: body.slice(0, 200) });
           const hdrs = [...res.headers.entries()].map(([name, value]) => ({name, value}));
           throw new Error(JSON.stringify({kind: 'http', status: res.status, statusText: res.statusText, body, headers: hdrs, hasRequestId: res.headers.has('x-request-id')}));
         }
         const data = await res.json();
         const raw = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
         const models = Array.isArray(raw) ? raw : [];
+        _dbg('capiClientListModels:result', { status: res.status, modelCount: models.length });
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
@@ -677,6 +692,7 @@ Module._load = function (request, parent, isMain) {
         entry.pendingInfo = null;
         entry.copilotToken = null;
         entry.copilotTokenExpiry = 0;
+        delete process.env.COPILOT_API_URL;
       }
       if (entry.cachedInfo !== null) {
         _dbg('resolveOrCache:cache-hit', { tokenHash: _tokenHash(token) });
