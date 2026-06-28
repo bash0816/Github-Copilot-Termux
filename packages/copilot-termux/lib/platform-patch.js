@@ -755,6 +755,86 @@ Module._load = function (request, parent, isMain) {
       }
       return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
     };
+    // 9. chatCompletionStreamDrive → OpenAI-compatible chat completion stream処理
+    // native は JS-side streamId（"js-"）を知らないため JS で代替。
+    result.chatCompletionStreamDrive = async function(streamId, reducerId, hasProcessors, onChunkCallback) {
+      const st = _jsStreams.get(streamId);
+      if (!st) {
+        throw new Error(`Native model HTTP stream was not found: ${streamId}`);
+      }
+      _dbg('chatCompletionStreamDrive:start', { streamId, eventCount: st.events.length, hasProcessors });
+      _jsStreams.delete(streamId);
+      let content = '', finishReason = null, id = null, model = null, role = 'assistant', usage = null, created = null;
+      const toolCallsByIndex = new Map(); // index → {id, type, function: {name, arguments}}
+      let functionCall = null; // 旧 delta.function_call 形式
+      let isFirstChunk = true;
+      for (const event of st.events) {
+        if (!event) continue;
+        if (event.id) id = event.id;
+        if (event.model) model = event.model;
+        if (event.usage) usage = event.usage;
+        if (event.created) created = event.created;
+        if (!Array.isArray(event.choices)) continue;
+        for (const choice of event.choices) {
+          if (choice.delta) {
+            if (choice.delta.role) role = choice.delta.role;
+            if (typeof choice.delta.content === 'string') content += choice.delta.content;
+            // tool_calls 断片を index ごとに集約
+            if (Array.isArray(choice.delta.tool_calls)) {
+              for (const tc of choice.delta.tool_calls) {
+                const idx = tc.index ?? 0;
+                if (!toolCallsByIndex.has(idx)) {
+                  toolCallsByIndex.set(idx, { id: '', type: 'function', function: { name: '', arguments: '' } });
+                }
+                const entry = toolCallsByIndex.get(idx);
+                if (tc.id) entry.id = tc.id;
+                if (tc.type) entry.type = tc.type;
+                if (tc.function) {
+                  if (tc.function.name) entry.function.name += tc.function.name;
+                  if (typeof tc.function.arguments === 'string') entry.function.arguments += tc.function.arguments;
+                }
+              }
+            }
+            // 旧 function_call 形式
+            if (choice.delta.function_call) {
+              if (!functionCall) functionCall = { name: '', arguments: '' };
+              if (choice.delta.function_call.name) functionCall.name += choice.delta.function_call.name;
+              if (typeof choice.delta.function_call.arguments === 'string') functionCall.arguments += choice.delta.function_call.arguments;
+            }
+          }
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+        }
+        if (hasProcessors && typeof onChunkCallback === 'function') {
+          let chunkContent = '', isBoundary = false;
+          for (const choice of event.choices) {
+            if (choice.delta && typeof choice.delta.content === 'string') chunkContent += choice.delta.content;
+            if (choice.finish_reason) isBoundary = true;
+          }
+          if (chunkContent || isBoundary || isFirstChunk) {
+            try { onChunkCallback(JSON.stringify({ content: chunkContent, size: Buffer.byteLength(chunkContent, 'utf8'), chunkBoundary: isBoundary, messageStart: isFirstChunk, streamingId: streamId })); } catch (_) {}
+          }
+          isFirstChunk = false;
+        }
+      }
+      const toolCalls = toolCallsByIndex.size > 0
+        ? Array.from(toolCallsByIndex.entries()).sort(([a], [b]) => a - b).map(([, v]) => v)
+        : undefined;
+      // tool call 系では content は null が正しい（テキストと排他）
+      const msgContent = (toolCalls || functionCall) ? (content || null) : content;
+      const message = { role, content: msgContent };
+      if (toolCalls) message.tool_calls = toolCalls;
+      if (functionCall) message.function_call = functionCall;
+      const completion = {
+        id: id || ('chatcmpl-' + Date.now().toString(36)),
+        object: 'chat.completion',
+        created: created || Math.floor(Date.now() / 1000),
+        model: model || 'gpt-4o',
+        choices: [{ index: 0, message, finish_reason: finishReason || 'stop', logprobs: null }],
+        usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      };
+      _dbg('chatCompletionStreamDrive:done', { id: completion.id, contentLen: content.length, toolCalls: toolCalls?.length ?? 0, finishReason: completion.choices[0].finish_reason });
+      return { json: JSON.stringify({ kind: 'ok', completion, copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
+    };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
     let _modelListCache = null; // capiClientListModels が取得したモデルリストキャッシュ（modelResolver fallback 用）
