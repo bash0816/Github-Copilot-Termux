@@ -198,58 +198,23 @@ Module._load = function (request, parent, isMain) {
         return [];
       };
     }
-    // modelResolverFirstAvailableDefaultFromOrder: native は JS-side capiClientListModels を
-    // 知らないため Free では null を返す。
-    // authInfoJson = modelsJson（capiClientListModels と同構造）。_modelListCache null でも参照可能。
-    // fallback: authInfoJson で native r を検証（Enterprise 保護）→ gpt-4o-mini/gpt-4o（Free 修正）。
+    // modelResolverFirstAvailableDefaultFromOrder: native が null の場合のみ、
+    // authInfoJson（= i$ が渡すモデルリスト JSON）から goldeneye-free-auto を補完する。
+    // native が非 null の場合はそのまま返す（Enterprise 保護・薄いラッパー原則）。
+    // gpt-4o-mini/gpt-4o 等のユーティリティモデルは fallback に使わない（公式仕様）。
     if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
       const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
       result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
         const r = _nativeModelResolver(authInfoJson, isGptEnabled);
-        // authInfoJson はモデルリスト JSON。_modelListCache null でも直接検索できる。
-        const _authModels = (() => {
-          try { const v = JSON.parse(authInfoJson); return Array.isArray(v) ? v : null; }
-          catch (_) { return null; }
-        })();
-        if (r != null) {
-          // native が非 null: authInfoJson で検証（_modelListCache null でも動く・Enterprise 保護）。
-          if (_authModels) {
-            const m = _authModels.find(m => m?.id === r && m?.policy?.state !== 'disabled');
-            if (m) return r;
+        if (r != null) return r;
+        // native が null の場合のみ: authInfoJson に明示された enabled auto model を返す。
+        try {
+          const models = JSON.parse(authInfoJson);
+          if (Array.isArray(models)) {
+            const auto = models.find(m => m?.id === 'goldeneye-free-auto' && m?.policy?.state === 'enabled');
+            if (auto) return auto.id;
           }
-          // authModels になければ _modelListCache でフォールバック検証。
-          if (_modelListCache && _modelListCache.length > 0) {
-            const enabledIds = new Set(
-              _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
-            );
-            if (enabledIds.has(r)) return r;
-          }
-          // fall through to cache-based resolver
-        }
-        if (!_modelListCache || _modelListCache.length === 0) {
-          // _modelListCache 未設定: authInfoJson から GPT fallback（Free 修正）。
-          // Enterprise native が valid model を返す場合は上で return 済み。
-          // isGptEnabled=false でも /chat/completions GPT は利用可能（Free 実機確認済み）。
-          if (_authModels) {
-            for (const id of ['gpt-4o-mini', 'gpt-4o']) {
-              const m = _authModels.find(m => m?.id === id && m?.policy?.state !== 'disabled');
-              if (m) return m.id;
-            }
-          }
-          return null;
-        }
-        const auto = _modelListCache.find(m =>
-          m && m.id === 'goldeneye-free-auto' &&
-          m.policy && m.policy.state === 'enabled'
-        );
-        if (auto) {
-          return auto.id;
-        }
-        // GPT fallback（cache あり）: isGptEnabled=false でも GPT 利用可能のため除外しない。
-        for (const id of ['gpt-4o-mini', 'gpt-4o']) {
-          const m = _modelListCache.find(m => m?.id === id && m?.policy?.state !== 'disabled');
-          if (m) return m.id;
-        }
+        } catch (_) {}
         return null;
       };
     }
