@@ -227,7 +227,21 @@ Module._load = function (request, parent, isMain) {
       const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
       result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
         const r = _nativeModelResolver(authInfoJson, isGptEnabled);
-        if (r != null) return r;
+        if (r != null) {
+          // native が非 null を返した場合、現在の _modelListCache と照合する。
+          // アカウント切替後は古い Enterprise モデルが返り得るため、cache にないモデルは採用しない。
+          // cache が null（切替直後で未取得）の場合も native を信頼しない → 下の fallback へ。
+          if (_modelListCache && _modelListCache.length > 0) {
+            const enabledIds = new Set(
+              _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
+            );
+            if (enabledIds.has(r)) return r;
+            _dbg('modelResolver:native-model-not-in-cache', { native: r });
+          } else {
+            _dbg('modelResolver:skip-native-no-cache', { native: r });
+          }
+          // fall through to cache-based resolver
+        }
         if (!_modelListCache || _modelListCache.length === 0) {
           _dbg('modelResolver:fallback', { reason: 'no-cache' });
           return null;
@@ -271,6 +285,7 @@ Module._load = function (request, parent, isMain) {
     }
     if (typeof result.capiClientListModels === 'function') {
       result.capiClientListModels = async function(handle, _includeHidden, _skipCache, _applyModelLimitCaps, _networkingConfigId) {
+        const snapshotGen = _modelListCacheGen; // 開始時の世代をキャプチャ → 完了時に照合して stale 結果を破棄
         let authHeaders;
         try {
           const prepared = result.capiClientPrepareRequestHeaders(handle, '', []);
@@ -286,7 +301,7 @@ Module._load = function (request, parent, isMain) {
         // BUG-NEW-2 で copilotUrl=fetchUrl にしたため api.individual への推論が発生していた（副作用修正）。
         const fetchUrl = _selectCapiUrl(process.env.COPILOT_API_URL);
         const copilotUrl = _DEFAULT_CAPI_URL;
-        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl, COPILOT_API_URL: process.env.COPILOT_API_URL ?? null });
+        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl, COPILOT_API_URL: process.env.COPILOT_API_URL ?? null, gen: snapshotGen });
         let res;
         try {
           res = await globalThis.fetch(`${fetchUrl}/models`, {method: 'GET', headers: authHeaders});
@@ -306,7 +321,11 @@ Module._load = function (request, parent, isMain) {
         _dbg('capiClientListModels:models-sample', models.slice(0, 5).map(m => ({
           id: m.id, status: m.status, policy: m.policy, expires_at: m.expires_at, deprecation: m.deprecation, model_picker_enabled: m.model_picker_enabled
         })));
-        _modelListCache = models;
+        if (_modelListCacheGen === snapshotGen) {
+          _modelListCache = models;
+        } else {
+          _dbg('capiClientListModels:stale-skipped', { snapshotGen, currentGen: _modelListCacheGen });
+        }
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
@@ -596,6 +615,8 @@ Module._load = function (request, parent, isMain) {
           }
         } catch(_) {}
       }
+      // Fix (TC-6): Free account model override — Enterprise→Free 切替後に stale モデルが残る問題
+      body = _applyModelOverride(body, req.url, 'modelHttpStreamStart');
       let res;
       try {
         res = await globalThis.fetch(req.url, {
@@ -710,6 +731,8 @@ Module._load = function (request, parent, isMain) {
           }
         } catch(_) {}
       }
+      // Fix (TC-6): Free account model override — Enterprise→Free 切替後に stale モデルが残る問題
+      body = _applyModelOverride(body, req.url, 'modelHttpRequest');
       let res;
       try {
         res = await globalThis.fetch(req.url, {
@@ -755,6 +778,34 @@ Module._load = function (request, parent, isMain) {
       }
       return { json: JSON.stringify({ kind: 'ok', copilotUsage, ttftMs: null, interTokenLatencyMs: null }) };
     };
+    // Helper: Free アカウント切替後に Enterprise モデルが残る問題を防ぐ model override。
+    // /chat/completions 系 URL にのみ適用し、_modelListCache の enabled モデルと照合。
+    // 対象外の場合は body をそのまま返す（破壊なし）。
+    function _applyModelOverride(body, url, prefix) {
+      try {
+        if (!body) return body;
+        const pathname = new URL(url).pathname;
+        if (!pathname.endsWith('/chat/completions')) return body;
+        const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+        if (!parsed || !parsed.model) return body;
+        _dbg(`${prefix}:request-model`, { model: parsed.model });
+        if (_modelListCache && _modelListCache.length > 0) {
+          const enabledIds = new Set(
+            _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
+          );
+          if (!enabledIds.has(parsed.model)) {
+            const freeAuto = _modelListCache.find(m => m?.id === 'goldeneye-free-auto' && m?.policy?.state === 'enabled');
+            if (freeAuto) {
+              _dbg(`${prefix}:model-override`, { from: parsed.model, to: 'goldeneye-free-auto' });
+              parsed.model = 'goldeneye-free-auto';
+              return JSON.stringify(parsed);
+            }
+          }
+        }
+      } catch(_) {}
+      return body;
+    }
+
     // 9. chatCompletionStreamDrive → OpenAI-compatible chat completion stream処理
     // native は JS-side streamId（"js-"）を知らないため JS で代替。
     result.chatCompletionStreamDrive = async function(streamId, reducerId, hasProcessors, onChunkCallback) {
@@ -849,6 +900,7 @@ Module._load = function (request, parent, isMain) {
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
     let _modelListCache = null; // capiClientListModels が取得したモデルリストキャッシュ（modelResolver fallback 用）
+    let _modelListCacheGen = 0; // アカウント切替時にインクリメント → 古い /models 結果の上書きを防ぐ
 
     result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
       _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0, copilotToken: null, copilotTokenExpiry: 0 });
@@ -1004,7 +1056,7 @@ Module._load = function (request, parent, isMain) {
     result.authManagerGetLastAuthErrors = function(uuid) { return []; };
     result.authManagerClearCache = function(uuid) {
       const e = _authMgr.get(uuid);
-      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
+      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; _modelListCacheGen++; delete process.env.COPILOT_API_URL; }
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
@@ -1012,6 +1064,7 @@ Module._load = function (request, parent, isMain) {
       // Clear stale enterprise endpoint and auth cache regardless of token presence
       delete process.env.COPILOT_API_URL;
       _modelListCache = null;
+      _modelListCacheGen++;
       const gen = ++entry.gen;
       entry.cachedInfo = null;
       entry.cachedToken = null;
@@ -1050,6 +1103,7 @@ Module._load = function (request, parent, isMain) {
       _loginTokens.set(`${hostUri}:${login || ''}`, token);
       delete process.env.COPILOT_API_URL;
       _modelListCache = null;
+      _modelListCacheGen++;
       const gen = ++entry.gen;
       entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
         if (entry.gen !== gen) return info; // stale: a newer switch superseded this fetch
@@ -1071,7 +1125,7 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
       const e = _authMgr.get(uuid);
-      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; _modelListCacheGen++; delete process.env.COPILOT_API_URL; }
       return true;
     };
     result.authManagerRefreshCopilotUser = async function(uuid) {
