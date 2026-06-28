@@ -141,8 +141,7 @@ GITHUB_COPILOT_VERBOSITY=debug copilot -p "テスト" 2>&1 | head -100
 | `buildAuthInfo:/copilot_internal/user` | `access_type_sku`, `copilot_plan`, `endpoints_api` が含まれるか |
 | `buildAuthInfo:/copilot_internal/v2/token` | copilot token が取得できているか |
 | `capiClientListModels:fetch` | `fetchUrl`, `copilotUrl` が `api.githubcopilot.com` になっているか |
-| `modelsFilterToPicker` | `nativeCount` が Enterprise では > 0 か |
-| `modelResolver:fallback` | Free で `goldeneye-free-auto` が見つかるか |
+| `buildAuthInfo:/copilot_internal/v2/token` (失敗時) | `status` と `body` がログに出るか（Free は 404 が期待値） |
 
 ---
 

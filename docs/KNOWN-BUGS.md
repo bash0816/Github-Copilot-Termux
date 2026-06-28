@@ -150,6 +150,44 @@ async function WEr(t, e) {
 
 ---
 
+---
+
+## BUG-NEW-1: Free TUI auto モードで 400 エラー
+
+**重要度**: High  
+**影響バージョン**: 1.0.65
+
+### 症状
+Free TUI 起動後、ログイン完了時に「Model changed from gpt-5-mini to Auto」→ `CAPIError: 400 The requested model is not supported`
+
+### 根本原因（調査中）
+- Free アカウントは `/copilot_internal/v2/token` → 404（Copilot token 取得不可）
+- `capiClientPrepareRequestHeaders` が copilotToken なし → native OAuth ヘッダをそのまま通す
+- OAuth token + "auto" モデル → 400 になる経路の詳細は未確定
+
+### 試行済みの誤ったアプローチ（削除済み）
+- `modelResolverFirstAvailableDefaultFromOrder` をインターセプトして auto → gpt-5-mini に差し替え
+  - 問題: gpt-5-mini も Free で 400。TUI がモデル再取得すると auto に戻り 400 再発
+  - ユーザー指摘: モデルの返り値を勝手に書き換えるのは禁止
+
+### 現在の対応（2026-06-28）
+1. インターセプト全削除（native のまま）
+2. `/v2/token` リクエストに `Copilot-Integration-Id: copilot-chat` ヘッダーを追加（404 原因調査）
+3. `/v2/token` 失敗時のレスポンスボディをデバッグログに記録
+
+### 期待される動作
+- Copilot token が取得できれば: auto routing が正常動作 → 400 解消
+- Copilot token が依然 404: native が null 返す → TUI "Auto-mode unavailable" 表示（400 なし）
+
+### 確認手順
+```bash
+gh auth switch --user bash0816
+COPILOT_TERMUX_DEBUG_AUTH=1 copilot 2>&1 | head -80
+# buildAuthInfo:/copilot_internal/v2/token の status/body を確認
+```
+
+---
+
 ## バグ優先度サマリー
 
 | ID | 内容 | 重要度 | 修正前提 | 状態 |
@@ -158,14 +196,16 @@ async function WEr(t, e) {
 | MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | ✅ 修正済み・enterprise 実機確認済み |
 | MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
 | UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | ✅ 修正済み（commit 6bd05d6） |
+| BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 調査中（インターセプト削除・v2/token ヘッダー追加） |
 
 ## 残作業
 
-1. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認（ユーザー作業）
-2. **npm publish**: MODEL-002 TUI テスト完了後に `npm-package.yml` を candidate タグで trigger → ユーザー承認 → latest
+1. **BUG-NEW-1 実機確認**: Free TUI で `buildAuthInfo:/copilot_internal/v2/token` ログを確認
+2. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認（ユーザー作業）
+3. **npm publish**: 全 TC 確認完了後に `npm-package.yml` を candidate タグで trigger → ユーザー承認 → latest
 
 ---
 
-> **1.0.65 対応状況（2026-06-27）**:  
-> AUTH-001・MODEL-001 修正済み。enterprise `-p` モード動作確認済み。  
-> TUI モードの MODEL-002 確認と UPDATE-001 対応が残。
+> **1.0.65 対応状況（2026-06-28）**:  
+> AUTH-001・MODEL-001・UPDATE-001 修正済み。enterprise `-p`/TUI 動作確認済み。  
+> BUG-NEW-1（Free auto 400）調査中。MODEL-002 TUI 確認待ち。
