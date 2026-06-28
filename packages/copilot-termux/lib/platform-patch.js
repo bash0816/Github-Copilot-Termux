@@ -199,20 +199,23 @@ Module._load = function (request, parent, isMain) {
       };
     }
     // modelResolverFirstAvailableDefaultFromOrder: native が null の場合のみ、
-    // authInfoJson（= i$ が渡すモデルリスト JSON）から goldeneye-free-auto を補完する。
-    // native が非 null の場合はそのまま返す（Enterprise 保護・薄いラッパー原則）。
-    // gpt-4o-mini/gpt-4o 等のユーティリティモデルは fallback に使わない（公式仕様）。
+    // authInfoJson（= i$ が渡すモデルリスト JSON）から auto モード用 fallback を選ぶ。
+    // native が non-null の場合はそのまま返す（Enterprise 保護）。
+    // gpt-4o-mini/gpt-4o は /chat/completions で Free 実機 200 OK 確認済み。
+    // auto モード内部でのみ使用（modelsFilterToPicker とは独立・ユーザーには見えない）。
     if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
       const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
-      result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
-        const r = _nativeModelResolver(authInfoJson, isGptEnabled);
+      result.modelResolverFirstAvailableDefaultFromOrder = function(...args) {
+        const r = _nativeModelResolver.apply(this, args);
         if (r != null) return r;
-        // native が null の場合のみ: authInfoJson に明示された enabled auto model を返す。
+        const [authInfoJson] = args;
         try {
           const models = JSON.parse(authInfoJson);
           if (Array.isArray(models)) {
-            const auto = models.find(m => m?.id === 'goldeneye-free-auto' && m?.policy?.state === 'enabled');
-            if (auto) return auto.id;
+            for (const id of ['gpt-4o-mini', 'gpt-4o']) {
+              const m = models.find(m => m?.id === id && m?.policy?.state !== 'disabled');
+              if (m) return m.id;
+            }
           }
         } catch (_) {}
         return null;
