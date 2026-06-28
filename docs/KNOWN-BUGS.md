@@ -86,15 +86,19 @@ return { models: l_o(p), unfilteredModels: p, ... }
 **真の原因**: `copilotUser`（`access_type_sku` / `copilot_plan`）が null / 古い / 別アカウント由来になり、`Mgn` が権限フィルタできない。
 `modelsFilterToPicker` の pass-through stub は**副次要因**（picker 非対象が混ざるだけ）。
 
-### ✅ 修正済み（2026-06-27）
+### ✅ 修正済み（2026-06-27・2026-06-28 追記）
 
 AUTH-001 解決後に実施（commits 9604a52, 01bae51）：
 - `modelsFilterToPicker` を native-first（fallback なし）に変更
 - 権限外モデルフィルタ（`Mgn`）が copilotUser 安定化後に正常動作
 
+**2026-06-28 追記（BUG-NEW-1 対応で再修正）**  
+Free プランは全モデル `model_picker_enabled=false` → native `[]` → auto-only → 400 の問題が判明。  
+`modelsFilterToPicker` に `policy.state=enabled` フォールバックを追加（denylist で `gpt-4.1` 系を除外）。
+
 ### 実機確認（2026-06-27）
 
-- free アカウント: 全モデル `model_picker_enabled=false` → `[]` → "Auto-mode unavailable"（期待動作）
+- free アカウント: 修正後 → `policy.state=enabled` かつ denylist 外のモデルが picker に表示される想定（TC-1 確認待ち）
 - enterprise アカウント `yterai-ehc`: 8 モデルが picker 有効 → `copilot -p "1+1は"` → claude-sonnet-4.6 で正常動作 ✓
 
 ---
@@ -158,32 +162,33 @@ async function WEr(t, e) {
 **影響バージョン**: 1.0.65
 
 ### 症状
-Free TUI 起動後、ログイン完了時に「Model changed from gpt-5-mini to Auto」→ `CAPIError: 400 The requested model is not supported`
+Free TUI 起動後 `Auto-mode unavailable and no fallback model could be resolved.`
 
-### 根本原因（調査中）
-- Free アカウントは `/copilot_internal/v2/token` → 404（Copilot token 取得不可）
-- `capiClientPrepareRequestHeaders` が copilotToken なし → native OAuth ヘッダをそのまま通す
-- OAuth token + "auto" モデル → 400 になる経路の詳細は未確定
+### 根本原因（2026-06-28 確定）
+1. Free は全 28 モデルが `model_picker_enabled=false` → native `modelsFilterToPicker` が `[]` を返す
+2. picker 空 → app.js が auto モードにフォールバック → `auto` モデルで 400 `model_not_supported`
+3. `gpt-4.1`（policy=enabled）はサポート終了のため代替不可
 
 ### 試行済みの誤ったアプローチ（削除済み）
 - `modelResolverFirstAvailableDefaultFromOrder` をインターセプトして auto → gpt-5-mini に差し替え
-  - 問題: gpt-5-mini も Free で 400。TUI がモデル再取得すると auto に戻り 400 再発
-  - ユーザー指摘: モデルの返り値を勝手に書き換えるのは禁止
+  - 問題: gpt-5-mini も Free で 400。モデルの返り値を書き換えるのは禁止（ユーザー指摘）
 
-### 現在の対応（2026-06-28）
-1. インターセプト全削除（native のまま）
-2. `/v2/token` リクエストに `Copilot-Integration-Id: copilot-chat` ヘッダーを追加（404 原因調査）
-3. `/v2/token` 失敗時のレスポンスボディをデバッグログに記録
+### ✅ 修正（2026-06-28 実装済み）
+`modelsFilterToPicker` に `policy.state=enabled` フォールバックを追加：
+- native が `[]` を返した場合のみ発動
+- `policy.state === 'enabled'` のモデルインデックスを返す
+- denylist（`_FREE_PICKER_DENYLIST`）で `gpt-4.1`, `gpt-4.1-2025-04-14` を除外
+- `apply(this, args)` パターンで native の将来的なシグネチャ変更に対応
 
-### 期待される動作（未確認）
-- Copilot token が取得できれば: auto routing が正常動作 → 400 解消の可能性あり
-- Copilot token が依然 404: native が null 返す → TUI "Auto-mode unavailable" 表示（400 が消えるかは未確認）
+また、`copilotTokenExpiry` の正規化バグを修正：
+- `expires_at` 欠落/NaN 時に `0`（永久有効）になるバグ → token あり時は 28 分デフォルト TTL を設定
+- `_normalizeCopilotTokenExpiry` ヘルパーで一元管理
 
-### 確認手順
+### 確認手順（TC-1）
 ```bash
 gh auth switch --user bash0816
 COPILOT_TERMUX_DEBUG_AUTH=1 copilot 2>&1 | head -80
-# buildAuthInfo:/copilot_internal/v2/token の status/body を確認
+# modelsFilterToPicker:fallback ログで enabled モデル数を確認
 ```
 
 ---
@@ -196,11 +201,11 @@ COPILOT_TERMUX_DEBUG_AUTH=1 copilot 2>&1 | head -80
 | MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | ✅ 修正済み・enterprise 実機確認済み |
 | MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
 | UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | ✅ 修正済み（commit 6bd05d6） |
-| BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 調査中（インターセプト削除・v2/token ヘッダー追加） |
+| BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
 
 ## 残作業
 
-1. **BUG-NEW-1 実機確認**: Free TUI で `buildAuthInfo:/copilot_internal/v2/token` ログを確認
+1. **TC-1 実機確認**: Free TUI で `modelsFilterToPicker:fallback` ログ確認・チャット送信テスト
 2. **MODEL-002 TUI テスト**: TUI モードで `/login` + アカウント切り替えを実機確認（ユーザー作業）
 3. **npm publish**: 全 TC 確認完了後に `npm-package.yml` を candidate タグで trigger → ユーザー承認 → latest
 

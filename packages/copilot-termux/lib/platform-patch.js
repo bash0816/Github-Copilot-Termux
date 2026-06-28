@@ -135,6 +135,11 @@ Module._load = function (request, parent, isMain) {
         const now = Date.now();
         for (const entry of _authMgr.values()) {
           if (entry.copilotToken && (entry.copilotTokenExpiry === 0 || entry.copilotTokenExpiry > now)) {
+            if (_authMgr.size > 1) {
+              _dbg('capiClientPrepareRequestHeaders:multi-entry-warn', {
+                size: _authMgr.size, tokenHash: _tokenHash(entry.copilotToken),
+              });
+            }
             if (prepared && Array.isArray(prepared.headers)) {
               const headers = prepared.headers.map(h =>
                 h.name && h.name.toLowerCase() === 'authorization'
@@ -146,6 +151,36 @@ Module._load = function (request, parent, isMain) {
           }
         }
         return prepared;
+      };
+    }
+    // modelsFilterToPicker: native は model_picker_enabled=true のモデルのみ返す。
+    // Free プランは全モデル model_picker_enabled=false → native が [] → auto-only → 400。
+    // フォールバックとして policy.state=enabled のモデルを返す（denylist で既知サポート終了を除外）。
+    // Enterprise では native が picker-enabled を返すためフォールバックは発動しない。
+    const _FREE_PICKER_DENYLIST = new Set(['gpt-4.1', 'gpt-4.1-2025-04-14']);
+    if (typeof result.modelsFilterToPicker === 'function') {
+      const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
+      result.modelsFilterToPicker = function(...args) {
+        const nativeResult = _nativeModelsFilterToPicker.apply(this, args);
+        if (Array.isArray(nativeResult) && nativeResult.length > 0) return nativeResult;
+        const modelsJson = args[0];
+        try {
+          const models = JSON.parse(modelsJson);
+          if (!Array.isArray(models)) return [];
+          const enabled = models.reduce((acc, m, i) => {
+            if (m.policy && m.policy.state === 'enabled') {
+              const id = m.id || '';
+              if (_FREE_PICKER_DENYLIST.has(id)) {
+                _dbg('modelsFilterToPicker:denylist-skip', { id });
+              } else {
+                acc.push(i);
+              }
+            }
+            return acc;
+          }, []);
+          _dbg('modelsFilterToPicker:fallback', { total: models.length, enabled: enabled.length });
+          return enabled;
+        } catch (_) { return []; }
       };
     }
     // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
@@ -160,7 +195,9 @@ Module._load = function (request, parent, isMain) {
         if (u.protocol === 'https:' && u.hostname === 'api.individual.githubcopilot.com') {
           return _INDIVIDUAL_CAPI_URL;
         }
-      } catch (_) {}
+      } catch (e) {
+        _dbg('selectCapiUrl:parse-error', { rawApiUrl, err: e.message });
+      }
       return _DEFAULT_CAPI_URL;
     }
     if (typeof result.capiClientListModels === 'function') {
@@ -656,8 +693,8 @@ Module._load = function (request, parent, isMain) {
         if (t.ok) {
           const td = await t.json();
           copilotToken = td.token || null;
-          if (td.expires_at) copilotTokenExpiry = Date.parse(td.expires_at);
-          _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null });
+          copilotTokenExpiry = copilotToken ? _normalizeCopilotTokenExpiry(td.expires_at) : 0;
+          _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null, copilotTokenExpiry });
         } else {
           let body = null;
           try { const raw = await t.text(); body = raw.length > 500 ? raw.slice(0, 500) + '…' : raw; } catch (_) {}
@@ -1057,6 +1094,11 @@ function _dbg(event, data) {
   process.stderr.write('[copilot-termux-auth] ' + JSON.stringify({ event, ...data, ts: new Date().toISOString() }) + '\n');
 }
 function _tokenHash(t) { return t ? t.slice(0, 8) + '...' : null; }
+const _COPILOT_TOKEN_DEFAULT_TTL_MS = 28 * 60 * 1000;
+function _normalizeCopilotTokenExpiry(expiresAt, now = Date.now()) {
+  const parsed = expiresAt ? Date.parse(expiresAt) : NaN;
+  return Number.isFinite(parsed) && parsed > now ? parsed : now + _COPILOT_TOKEN_DEFAULT_TTL_MS;
+}
 // --- end 計装 ---
 
 async function _readGhToken(env) {
