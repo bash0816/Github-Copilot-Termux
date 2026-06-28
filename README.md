@@ -4,13 +4,27 @@ GitHub Copilot CLI for Termux (Android aarch64).
 
 Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
+## ⚠️ Notice for 1.0.65 users / 1.0.65 をインストールした方へ
+
+**1.0.65 has known issues and @latest has been reverted to 1.0.63.**  
+1.0.65 に既知の問題が見つかったため、**@latest を 1.0.63 に戻しました。**
+
+If you installed 1.0.65, please downgrade:  
+1.0.65 をインストール済みの場合は以下で 1.0.63 に戻してください：
+
+```sh
+npm install -g @bash0816/copilot-termux@1.0.63 --force
+copilot-termux setup
+```
+
 ## Status / 状態
 
-- version: `1.0.65` (latest)
+- **@latest**: `1.0.63`（recommended / 推奨）
+- `1.0.65`: ⚠️ known issues / 既知の問題あり → not recommended / 使用非推奨
 - package: `@bash0816/copilot-termux`
-- `copilot -p`: **available** ✅
-- TUI (`copilot`): **available** ✅
-- MCP: **available** ✅
+- `copilot -p`: **available** ✅（1.0.63）
+- TUI (`copilot`): **available** ✅（1.0.63）
+- MCP: **available** ✅（1.0.63）
 
 ## Install / インストール
 
@@ -72,7 +86,8 @@ copilot-termux setup
 
 ## Known Issues / 既知の問題
 
-なし（Device A・Device B 検証済み）
+- **1.0.65**: upstream version mismatch (downloads 1.0.64 binary) + `-p` mode bug → reverted to 1.0.63
+- **1.0.65**: upstream 不整合（1.0.64 バイナリを取得）+ `-p` モード不具合 → 1.0.63 に戻し済み
 
 ## Do Not Use / 非推奨
 
