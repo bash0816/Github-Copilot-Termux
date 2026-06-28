@@ -175,9 +175,9 @@ Free TUI 起動後、ログイン完了時に「Model changed from gpt-5-mini to
 2. `/v2/token` リクエストに `Copilot-Integration-Id: copilot-chat` ヘッダーを追加（404 原因調査）
 3. `/v2/token` 失敗時のレスポンスボディをデバッグログに記録
 
-### 期待される動作
-- Copilot token が取得できれば: auto routing が正常動作 → 400 解消
-- Copilot token が依然 404: native が null 返す → TUI "Auto-mode unavailable" 表示（400 なし）
+### 期待される動作（未確認）
+- Copilot token が取得できれば: auto routing が正常動作 → 400 解消の可能性あり
+- Copilot token が依然 404: native が null 返す → TUI "Auto-mode unavailable" 表示（400 が消えるかは未確認）
 
 ### 確認手順
 ```bash
