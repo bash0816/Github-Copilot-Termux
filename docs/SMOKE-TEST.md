@@ -11,11 +11,11 @@ GitHub Copilot の権限は Chat とエージェント（Agent）の 2 種類あ
 
 | プラン | Chat（`copilot` TUI） | エージェント（`copilot -p`） |
 |--------|----------------------|---------------------------|
-| **Free** | ✅ 動作（auto mode のみ、モデル選択不可） | ❌ 権限なし |
+| **Free** | ✅ 動作（`policy.state=enabled` モデルが picker に表示される） | ❌ 権限なし |
 | **Enterprise** | ✅ 動作（モデル選択可） | ✅ 動作 |
 
 - **`copilot -p`（エージェントモード）** は Enterprise のみ。Free で実行すると権限エラーになる
-- Free の Chat は 2026-06-24 から model picker 廃止。auto mode のみ使用可能
+- Free の Chat は全モデル `model_picker_enabled=false` だが、`policy.state=enabled` かつ denylist 外のモデルが picker に表示される（platform-patch.js フォールバック）
 - Enterprise の Chat はモデル選択あり（`model_picker_enabled: true` のモデルが表示される）
 
 ---
@@ -40,12 +40,13 @@ copilot
 
 **期待動作**:
 - TUI が起動する
-- モデル選択画面が出ない（auto mode のみ、`model_picker_enabled=true` のモデルがゼロのため）
+- `policy.state=enabled` かつ denylist 外のモデルが picker に表示される（`modelsFilterToPicker` フォールバック）
 - チャットを送信すると応答が返ってくる
 
 **確認ポイント**:
-- ❌ `CAPIError: 400 The requested model is not supported` が出ないこと
-- ❌ `Auto-mode unavailable and no fallback model could be resolved` が出ないこと（`goldeneye-free-auto` が `/models` に存在する場合）
+- ❌ `Auto-mode unavailable and no fallback model could be resolved` が出ないこと
+- ❌ `gpt-4.1` / `gpt-4.1-2025-04-14` が picker に表示されないこと（denylist 除外）
+- デバッグログで `modelsFilterToPicker:fallback` が出ること（picker フォールバック動作確認）
 
 ---
 
