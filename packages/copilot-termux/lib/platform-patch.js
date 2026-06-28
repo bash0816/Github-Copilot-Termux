@@ -1307,6 +1307,12 @@ Module._load = function (request, parent, isMain) {
 // bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
 // GitHub OAuth token via env var or gh CLI (keychain unavailable on bionic)
 
+const _COPILOT_TOKEN_DEFAULT_TTL_MS = 28 * 60 * 1000;
+function _normalizeCopilotTokenExpiry(expiresAt, now = Date.now()) {
+  const parsed = expiresAt ? Date.parse(expiresAt) : NaN;
+  return Number.isFinite(parsed) && parsed > now ? parsed : now + _COPILOT_TOKEN_DEFAULT_TTL_MS;
+}
+
 async function _readGhToken(env) {
   const envToken =
     (env && (env.GITHUB_TOKEN || env.GH_TOKEN || env.COPILOT_GITHUB_TOKEN)) ||
