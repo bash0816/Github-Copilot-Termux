@@ -108,6 +108,47 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
+    // agentsResolveToolAliases: v1.0.65 新規追加ネイティブ関数。
+    // Free ユーザーのチャット時に呼ばれ、Bionic で誤ったインデックスを返すと
+    // tools[N].function.name が undefined → Copilot API 400 になる。
+    // ネイティブ結果を検証し、無効なら JS 実装でフォールバックする。
+    if (typeof result.agentsResolveToolAliases === 'function') {
+      const _nativeResolveAliases = result.agentsResolveToolAliases;
+      result.agentsResolveToolAliases = function(allowedTools, allToolsMeta, externalToolsMeta) {
+        try {
+          const r = _nativeResolveAliases(allowedTools, allToolsMeta, externalToolsMeta);
+          if (Array.isArray(r) && r.length > 0 &&
+              r.every(i => typeof i === 'number' && i >= 0 && i < allToolsMeta.length)) {
+            _dbg('agentsResolveToolAliases:native-ok', { count: r.length });
+            return r;
+          }
+          _dbg('agentsResolveToolAliases:native-invalid', { result: r });
+        } catch(e) {
+          _dbg('agentsResolveToolAliases:error', { err: e.message });
+        }
+        // JS フォールバック
+        const allowed = allowedTools;
+        // null または ["*"] → 全ツール
+        if (!allowed || (allowed.length === 1 && allowed[0] === '*')) {
+          return allToolsMeta.map((_, i) => i);
+        }
+        // 空配列 → 空配列（許可ツールなし）
+        if (allowed.length === 0) {
+          _dbg('agentsResolveToolAliases:js-fallback-empty', {});
+          return [];
+        }
+        // 名前マッチング
+        const allowedSet = new Set(allowed.map(n => (n || '').toLowerCase()));
+        const indices = [];
+        allToolsMeta.forEach((tool, i) => {
+          const name = (tool.name || '').toLowerCase();
+          const ns = (tool.namespacedName || '').toLowerCase();
+          if (allowedSet.has(name) || allowedSet.has(ns)) indices.push(i);
+        });
+        _dbg('agentsResolveToolAliases:js-fallback', { allowedCount: allowed.length, matched: indices.length });
+        return indices;
+      };
+    }
     // authGetCopilotApiUrl: type=token/env/user/gh-cli/api-key では native が null を返す。
     // _b() はこれを見て models=[] を返しモデル選択が "No supported model" になる。
     // OAuth token でも標準 copilot API URL は固定のため、null 時はデフォルト URL を返す。
@@ -297,6 +338,25 @@ Module._load = function (request, parent, isMain) {
       const entry = { abort: () => abortCtrl.abort(), reader: null };
       _nfMap.set(requestId, entry);
 
+      // Fix (TOOLS-002): tools[].function.name が空/undefined のエントリをフィルタリング
+      let body = req.body ?? undefined;
+      if (body) {
+        try {
+          const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+          if (parsed && Array.isArray(parsed.tools)) {
+            const before = parsed.tools.length;
+            parsed.tools = parsed.tools.filter(
+              t => t && t.function && typeof t.function.name === 'string' && t.function.name.length > 0
+            );
+            if (parsed.tools.length !== before) {
+              if (parsed.tools.length === 0) delete parsed.tools;
+              body = JSON.stringify(parsed);
+              _dbg('networkFetchStreamStart:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
+            }
+          }
+        } catch(_) {}
+      }
+
       const headers = {};
       if (Array.isArray(req.headers)) {
         for (const { name, value } of req.headers) headers[name] = value;
@@ -310,7 +370,7 @@ Module._load = function (request, parent, isMain) {
           res = await globalThis.fetch(req.url, {
             method: req.method || 'GET',
             headers,
-            body: req.body ?? undefined,
+            body: body,
             signal: abortCtrl.signal,
             redirect: req.redirect || 'follow',
           });
@@ -519,6 +579,23 @@ Module._load = function (request, parent, isMain) {
           }
         } catch(_) {}
       }
+      // Fix (TOOLS-002): tools[].function.name が空/undefined のエントリをフィルタリング
+      if (body) {
+        try {
+          const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+          if (parsed && Array.isArray(parsed.tools)) {
+            const before = parsed.tools.length;
+            parsed.tools = parsed.tools.filter(
+              t => t && t.function && typeof t.function.name === 'string' && t.function.name.length > 0
+            );
+            if (parsed.tools.length !== before) {
+              if (parsed.tools.length === 0) delete parsed.tools;
+              body = JSON.stringify(parsed);
+              _dbg('modelHttpStreamStart:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
+            }
+          }
+        } catch(_) {}
+      }
       let res;
       try {
         res = await globalThis.fetch(req.url, {
@@ -613,6 +690,23 @@ Module._load = function (request, parent, isMain) {
             delete parsed.reasoning_effort;
             body = JSON.stringify(parsed);
             _dbg('modelHttpRequest:stripped_reasoning_effort', { url: req.url });
+          }
+        } catch(_) {}
+      }
+      // Fix (TOOLS-002): tools[].function.name が空/undefined のエントリをフィルタリング
+      if (body) {
+        try {
+          const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
+          if (parsed && Array.isArray(parsed.tools)) {
+            const before = parsed.tools.length;
+            parsed.tools = parsed.tools.filter(
+              t => t && t.function && typeof t.function.name === 'string' && t.function.name.length > 0
+            );
+            if (parsed.tools.length !== before) {
+              if (parsed.tools.length === 0) delete parsed.tools;
+              body = JSON.stringify(parsed);
+              _dbg('modelHttpRequest:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
+            }
           }
         } catch(_) {}
       }
