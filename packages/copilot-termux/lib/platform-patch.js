@@ -617,11 +617,16 @@ Module._load = function (request, parent, isMain) {
       }
       // Fix (TC-6): Free account model override — Enterprise→Free 切替後に stale モデルが残る問題
       body = _applyModelOverride(body, req.url, 'modelHttpStreamStart');
+      // body 書き換え後に content-length が古くなるのを防ぐ（reasoning_effort/tools/model 除去で長さが変わる）
+      const fetchHeaders = {};
+      for (const [k, v] of Object.entries(req.headers || {})) {
+        if (k.toLowerCase() !== 'content-length') fetchHeaders[k] = v;
+      }
       let res;
       try {
         res = await globalThis.fetch(req.url, {
           method: req.method || 'POST',
-          headers: req.headers || {},
+          headers: fetchHeaders,
           body: body,
         });
       } catch(e) {
@@ -733,11 +738,16 @@ Module._load = function (request, parent, isMain) {
       }
       // Fix (TC-6): Free account model override — Enterprise→Free 切替後に stale モデルが残る問題
       body = _applyModelOverride(body, req.url, 'modelHttpRequest');
+      // body 書き換え後に content-length が古くなるのを防ぐ
+      const fetchHeaders = {};
+      for (const [k, v] of Object.entries(req.headers || {})) {
+        if (k.toLowerCase() !== 'content-length') fetchHeaders[k] = v;
+      }
       let res;
       try {
         res = await globalThis.fetch(req.url, {
           method: req.method || 'POST',
-          headers: req.headers || {},
+          headers: fetchHeaders,
           body: body,
         });
       } catch(e) {
@@ -999,6 +1009,8 @@ Module._load = function (request, parent, isMain) {
         entry.pendingInfo = null;
         entry.copilotToken = null;
         entry.copilotTokenExpiry = 0;
+        _modelListCache = null;
+        _modelListCacheGen++;
         delete process.env.COPILOT_API_URL;
       }
       if (entry.cachedInfo !== null) {
