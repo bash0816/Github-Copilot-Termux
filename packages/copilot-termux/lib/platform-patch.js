@@ -768,6 +768,10 @@ Module._load = function (request, parent, isMain) {
       const toolCallsByIndex = new Map(); // index → {id, type, function: {name, arguments}}
       let functionCall = null; // 旧 delta.function_call 形式
       let isFirstChunk = true;
+      // Fix (GPT-5.5 No-Go #1): 終端 finish_reason が来たか追跡する
+      // finishReason || 'stop' のデフォルトは壊れたストリームを正常完了に見せる危険がある
+      let seenTerminalFinishReason = false;
+      const TERMINAL_FINISH_REASONS = new Set(['stop', 'tool_calls', 'function_call', 'length', 'content_filter']);
       for (const event of st.events) {
         if (!event) continue;
         if (event.id) id = event.id;
@@ -802,15 +806,20 @@ Module._load = function (request, parent, isMain) {
               if (typeof choice.delta.function_call.arguments === 'string') functionCall.arguments += choice.delta.function_call.arguments;
             }
           }
-          if (choice.finish_reason) finishReason = choice.finish_reason;
+          if (choice.finish_reason) {
+            finishReason = choice.finish_reason;
+            if (TERMINAL_FINISH_REASONS.has(choice.finish_reason)) seenTerminalFinishReason = true;
+          }
         }
         if (hasProcessors && typeof onChunkCallback === 'function') {
-          let chunkContent = '', isBoundary = false;
+          let chunkContent = '', isBoundary = false, hasToolDelta = false;
           for (const choice of event.choices) {
             if (choice.delta && typeof choice.delta.content === 'string') chunkContent += choice.delta.content;
+            // Fix (GPT-5.5 No-Go #2): tool/function call delta も callback に通知する
+            if (choice.delta && (choice.delta.tool_calls || choice.delta.function_call)) hasToolDelta = true;
             if (choice.finish_reason) isBoundary = true;
           }
-          if (chunkContent || isBoundary || isFirstChunk) {
+          if (chunkContent || isBoundary || isFirstChunk || hasToolDelta) {
             try { onChunkCallback(JSON.stringify({ content: chunkContent, size: Buffer.byteLength(chunkContent, 'utf8'), chunkBoundary: isBoundary, messageStart: isFirstChunk, streamingId: streamId })); } catch (_) {}
           }
           isFirstChunk = false;
@@ -824,15 +833,17 @@ Module._load = function (request, parent, isMain) {
       const message = { role, content: msgContent };
       if (toolCalls) message.tool_calls = toolCalls;
       if (functionCall) message.function_call = functionCall;
+      // Fix (GPT-5.5 No-Go #1): 終端が来ていない場合は 'stop' を補完しない
+      const effectiveFinishReason = seenTerminalFinishReason ? finishReason : (finishReason ?? null);
       const completion = {
         id: id || ('chatcmpl-' + Date.now().toString(36)),
         object: 'chat.completion',
         created: created || Math.floor(Date.now() / 1000),
         model: model || 'gpt-4o',
-        choices: [{ index: 0, message, finish_reason: finishReason || 'stop', logprobs: null }],
+        choices: [{ index: 0, message, finish_reason: effectiveFinishReason, logprobs: null }],
         usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       };
-      _dbg('chatCompletionStreamDrive:done', { id: completion.id, contentLen: content.length, toolCalls: toolCalls?.length ?? 0, finishReason: completion.choices[0].finish_reason });
+      _dbg('chatCompletionStreamDrive:done', { id: completion.id, contentLen: content.length, toolCalls: toolCalls?.length ?? 0, finishReason: completion.choices[0].finish_reason, seenTerminal: seenTerminalFinishReason });
       return { json: JSON.stringify({ kind: 'ok', completion, copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
     };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===

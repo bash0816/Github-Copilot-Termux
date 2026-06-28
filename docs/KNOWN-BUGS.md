@@ -193,6 +193,52 @@ COPILOT_TERMUX_DEBUG_AUTH=1 copilot 2>&1 | head -80
 
 ---
 
+---
+
+## BUG-NEW-3: capiClientEnableModelPolicy / capiClientCreateModelSession がスタブなし
+
+**重要度**: High
+**影響バージョン**: 1.0.65
+**発見日**: 2026-06-28（ログ調査で判明）
+
+### 症状
+Free TUI でモデルを選択した際、`policy.state: "disabled"` のモデルに対して
+`capiClientEnableModelPolicy` が Rust ネイティブで呼ばれ、API が 400 を返す。
+→ app.js がエラーとして扱い、モデルが使えない状態になる可能性がある。
+
+### app.js の呼び出しフロー
+```js
+async enableModelPolicy(e) {
+  r = await x.capiClientEnableModelPolicy(nativeHandle, e, token)
+  // 400 → { success: false, canBeEnabled: false, error: ... }
+  // Free: 全モデル policy.state=disabled → 常に 400
+}
+
+async createModelSession(e) {
+  r = await x.capiClientCreateModelSession(nativeHandle, e, token)
+  // モデルセッション作成 → TUI チャット前に呼ばれる可能性
+}
+```
+
+### 問題
+- `capiClientEnableModelPolicy` は HTTP fetch（tokio）を使う可能性 → bionic で SIGSEGV リスク
+- `napi-known-exports.json` に未記載 → スタブなし
+- Free アカウントでは必ず 400 が返る → app.js がエラー処理に入る
+- **ユーザー指摘**: 「Free の方には 400 を 200 に変えるものがあるはず」
+
+### 修正方針（未実装）
+`capiClientEnableModelPolicy` に JSスタブを追加：
+- Free（全 policy=disabled）: `{ success: false, canBeEnabled: false, error: null }` を返す
+  → app.js は「有効化不可」として処理を継続（エラー扱いにしない）
+- Enterprise: `{ success: true }` を返す（native が正常動作すると仮定）
+
+または：
+- native に委ねて、クラッシュした場合のみ fallback する
+
+**要調査**: TUI でモデル選択時のログを確認して実際に呼ばれているか確認する。
+
+---
+
 ## バグ優先度サマリー
 
 | ID | 内容 | 重要度 | 修正前提 | 状態 |
