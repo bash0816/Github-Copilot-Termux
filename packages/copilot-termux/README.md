@@ -6,7 +6,7 @@ Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
 ## Status / 状態
 
-- version: `1.0.63`
+- version: `1.0.65`
 - `copilot -p`: **available** ✅
 - TUI (`copilot`): **available** ✅
 - MCP: **available** ✅

@@ -119,12 +119,9 @@ Module._load = function (request, parent, isMain) {
           const r = _nativeResolveAliases(allowedTools, allToolsMeta, externalToolsMeta);
           if (Array.isArray(r) && r.length > 0 &&
               r.every(i => typeof i === 'number' && i >= 0 && i < allToolsMeta.length)) {
-            _dbg('agentsResolveToolAliases:native-ok', { count: r.length });
             return r;
           }
-          _dbg('agentsResolveToolAliases:native-invalid', { result: r });
         } catch(e) {
-          _dbg('agentsResolveToolAliases:error', { err: e.message });
         }
         // JS フォールバック
         const allowed = allowedTools;
@@ -134,7 +131,6 @@ Module._load = function (request, parent, isMain) {
         }
         // 空配列 → 空配列（許可ツールなし）
         if (allowed.length === 0) {
-          _dbg('agentsResolveToolAliases:js-fallback-empty', {});
           return [];
         }
         // 名前マッチング
@@ -145,7 +141,6 @@ Module._load = function (request, parent, isMain) {
           const ns = (tool.namespacedName || '').toLowerCase();
           if (allowedSet.has(name) || allowedSet.has(ns)) indices.push(i);
         });
-        _dbg('agentsResolveToolAliases:js-fallback', { allowedCount: allowed.length, matched: indices.length });
         return indices;
       };
     }
@@ -176,11 +171,6 @@ Module._load = function (request, parent, isMain) {
         const now = Date.now();
         for (const entry of _authMgr.values()) {
           if (entry.copilotToken && (entry.copilotTokenExpiry === 0 || entry.copilotTokenExpiry > now)) {
-            if (_authMgr.size > 1) {
-              _dbg('capiClientPrepareRequestHeaders:multi-entry-warn', {
-                size: _authMgr.size, tokenHash: _tokenHash(entry.copilotToken),
-              });
-            }
             if (prepared && Array.isArray(prepared.headers)) {
               const headers = prepared.headers.map(h =>
                 h.name && h.name.toLowerCase() === 'authorization'
@@ -215,7 +205,6 @@ Module._load = function (request, parent, isMain) {
             }
             return acc;
           }, []);
-          _dbg('modelsFilterToPicker:fallback', { total: models.length, enabled: enabled.length, enabledIds: enabled.map(i => models[i]?.id) });
           return enabled;
         } catch (_) { return []; }
       };
@@ -236,14 +225,11 @@ Module._load = function (request, parent, isMain) {
               _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
             );
             if (enabledIds.has(r)) return r;
-            _dbg('modelResolver:native-model-not-in-cache', { native: r });
           } else {
-            _dbg('modelResolver:skip-native-no-cache', { native: r });
           }
           // fall through to cache-based resolver
         }
         if (!_modelListCache || _modelListCache.length === 0) {
-          _dbg('modelResolver:fallback', { reason: 'no-cache' });
           return null;
         }
         const auto = _modelListCache.find(m =>
@@ -251,7 +237,6 @@ Module._load = function (request, parent, isMain) {
           m.policy && m.policy.state === 'enabled'
         );
         if (auto) {
-          _dbg('modelResolver:fallback', { chosen: 'goldeneye-free-auto' });
           return auto.id;
         }
         const gpt41 = _modelListCache.find(m =>
@@ -259,10 +244,8 @@ Module._load = function (request, parent, isMain) {
           m.policy && m.policy.state === 'enabled'
         );
         if (gpt41) {
-          _dbg('modelResolver:fallback', { chosen: gpt41.id, reason: 'no-goldeneye-free-auto' });
           return gpt41.id;
         }
-        _dbg('modelResolver:fallback', { reason: 'no-suitable-model' });
         return null;
       };
     }
@@ -279,7 +262,6 @@ Module._load = function (request, parent, isMain) {
           return _INDIVIDUAL_CAPI_URL;
         }
       } catch (e) {
-        _dbg('selectCapiUrl:parse-error', { rawApiUrl, err: e.message });
       }
       return _DEFAULT_CAPI_URL;
     }
@@ -301,7 +283,6 @@ Module._load = function (request, parent, isMain) {
         // BUG-NEW-2 で copilotUrl=fetchUrl にしたため api.individual への推論が発生していた（副作用修正）。
         const fetchUrl = _selectCapiUrl(process.env.COPILOT_API_URL);
         const copilotUrl = _DEFAULT_CAPI_URL;
-        _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl, COPILOT_API_URL: process.env.COPILOT_API_URL ?? null, gen: snapshotGen });
         let res;
         try {
           res = await globalThis.fetch(`${fetchUrl}/models`, {method: 'GET', headers: authHeaders});
@@ -310,21 +291,15 @@ Module._load = function (request, parent, isMain) {
         }
         if (!res.ok) {
           const body = await res.text().catch(() => '');
-          _dbg('capiClientListModels:error', { status: res.status, bodySnippet: body.slice(0, 200) });
           const hdrs = [...res.headers.entries()].map(([name, value]) => ({name, value}));
           throw new Error(JSON.stringify({kind: 'http', status: res.status, statusText: res.statusText, body, headers: hdrs, hasRequestId: res.headers.has('x-request-id')}));
         }
         const data = await res.json();
         const raw = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
         const models = Array.isArray(raw) ? raw : [];
-        _dbg('capiClientListModels:result', { status: res.status, modelCount: models.length });
-        _dbg('capiClientListModels:models-sample', models.slice(0, 5).map(m => ({
-          id: m.id, status: m.status, policy: m.policy, expires_at: m.expires_at, deprecation: m.deprecation, model_picker_enabled: m.model_picker_enabled
-        })));
         if (_modelListCacheGen === snapshotGen) {
           _modelListCache = models;
         } else {
-          _dbg('capiClientListModels:stale-skipped', { snapshotGen, currentGen: _modelListCacheGen });
         }
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
@@ -370,7 +345,6 @@ Module._load = function (request, parent, isMain) {
             if (parsed.tools.length !== before) {
               if (parsed.tools.length === 0) delete parsed.tools;
               body = JSON.stringify(parsed);
-              _dbg('networkFetchStreamStart:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
             }
           }
         } catch(_) {}
@@ -562,7 +536,6 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.anthropicMessageStreamAccumulatorFinish === 'function') {
       result.anthropicMessageStreamAccumulatorFinish = function(id) {
         const acc = _jsAccs.get(id) || { message: null };
-        _dbg('accumulatorFinish', { id, message: acc.message ? { stop_reason: acc.message.stop_reason, contentTypes: (acc.message.content||[]).map(b=>b.type+':'+(b.text||'').slice(0,30)) } : null });
         _jsAccs.delete(id);
         return { json: JSON.stringify({ message: acc.message }) };
       };
@@ -578,7 +551,6 @@ Module._load = function (request, parent, isMain) {
     // 4. modelHttpStreamStart → fetch full SSE body, parse events
     result.modelHttpStreamStart = async function(jsonArg) {
       const req = JSON.parse(jsonArg);
-      _dbg('modelHttpStreamStart', { url: req.url, method: req.method });
       let body = req.body;
       if (body !== null && body !== undefined && typeof body === 'object') {
         if (body.type === 'Buffer' && Array.isArray(body.data)) {
@@ -594,7 +566,6 @@ Module._load = function (request, parent, isMain) {
           if (parsed && 'reasoning_effort' in parsed) {
             delete parsed.reasoning_effort;
             body = JSON.stringify(parsed);
-            _dbg('modelHttpStreamStart:stripped_reasoning_effort', { url: req.url });
           }
         } catch(_) {}
       }
@@ -610,7 +581,6 @@ Module._load = function (request, parent, isMain) {
             if (parsed.tools.length !== before) {
               if (parsed.tools.length === 0) delete parsed.tools;
               body = JSON.stringify(parsed);
-              _dbg('modelHttpStreamStart:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
             }
           }
         } catch(_) {}
@@ -639,7 +609,6 @@ Module._load = function (request, parent, isMain) {
         return { json: JSON.stringify({ bodyText, status: res.status, statusText: res.statusText, headers, streamId: null }) };
       }
       const events = _parseAnthropicSSE(bodyText);
-      _dbg('modelHttpStreamStart:parsed', { status: res.status, eventCount: events.length, bodySnippet: bodyText.slice(0, 300) });
       const finalMessage = _reconstructFinalMessage(events);
       const streamId = 'js-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       _jsStreams.set(streamId, { events, index: 0, finalMessage });
@@ -715,7 +684,6 @@ Module._load = function (request, parent, isMain) {
           if (parsed && 'reasoning_effort' in parsed) {
             delete parsed.reasoning_effort;
             body = JSON.stringify(parsed);
-            _dbg('modelHttpRequest:stripped_reasoning_effort', { url: req.url });
           }
         } catch(_) {}
       }
@@ -731,7 +699,6 @@ Module._load = function (request, parent, isMain) {
             if (parsed.tools.length !== before) {
               if (parsed.tools.length === 0) delete parsed.tools;
               body = JSON.stringify(parsed);
-              _dbg('modelHttpRequest:stripped_empty_tool_names', { url: req.url, before, after: parsed.tools?.length ?? 0 });
             }
           }
         } catch(_) {}
@@ -769,7 +736,6 @@ Module._load = function (request, parent, isMain) {
       if (!st) {
         throw new Error(`Native mod HTTP stream was not found: ${streamId}`);
       }
-      _dbg('responsesStreamDrive:start', { streamId, eventCount: st.events.length, hasProcessors, sample: st.events.slice(0,2) });
       _jsStreams.delete(streamId);
       let copilotUsage = null;
       for (const event of st.events) {
@@ -780,7 +746,6 @@ Module._load = function (request, parent, isMain) {
         if (parsed && parsed.copilotUsage !== undefined && parsed.copilotUsage !== null)
           copilotUsage = parsed.copilotUsage;
         const cc = parsed && parsed.chunkContext;
-        _dbg('responsesStreamDrive:chunk', { eventType: event.type, cc: cc ? { content: cc.content, size: cc.size, messageStart: !!cc.messageStart, chunkBoundary: !!cc.chunkBoundary } : null });
         if (hasProcessors && typeof onChunkCallback === 'function' && cc &&
             (cc.content || cc.messageStart || cc.reportIntentArguments || cc.chunkBoundary || cc.size > 0)) {
           try { onChunkCallback(JSON.stringify(cc)); } catch (_) {}
@@ -798,7 +763,6 @@ Module._load = function (request, parent, isMain) {
         if (!pathname.endsWith('/chat/completions')) return body;
         const parsed = JSON.parse(typeof body === 'string' ? body : body.toString());
         if (!parsed || !parsed.model) return body;
-        _dbg(`${prefix}:request-model`, { model: parsed.model });
         if (_modelListCache && _modelListCache.length > 0) {
           const enabledIds = new Set(
             _modelListCache.filter(m => m?.policy?.state === 'enabled').map(m => m.id).filter(Boolean)
@@ -806,7 +770,6 @@ Module._load = function (request, parent, isMain) {
           if (!enabledIds.has(parsed.model)) {
             const freeAuto = _modelListCache.find(m => m?.id === 'goldeneye-free-auto' && m?.policy?.state === 'enabled');
             if (freeAuto) {
-              _dbg(`${prefix}:model-override`, { from: parsed.model, to: 'goldeneye-free-auto' });
               parsed.model = 'goldeneye-free-auto';
               return JSON.stringify(parsed);
             }
@@ -823,7 +786,6 @@ Module._load = function (request, parent, isMain) {
       if (!st) {
         throw new Error(`Native model HTTP stream was not found: ${streamId}`);
       }
-      _dbg('chatCompletionStreamDrive:start', { streamId, eventCount: st.events.length, hasProcessors });
       _jsStreams.delete(streamId);
       let content = '', finishReason = null, id = null, model = null, role = 'assistant', usage = null, created = null;
       const toolCallsByIndex = new Map(); // index → {id, type, function: {name, arguments}}
@@ -904,7 +866,6 @@ Module._load = function (request, parent, isMain) {
         choices: [{ index: 0, message, finish_reason: effectiveFinishReason, logprobs: null }],
         usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       };
-      _dbg('chatCompletionStreamDrive:done', { id: completion.id, contentLen: content.length, toolCalls: toolCalls?.length ?? 0, finishReason: completion.choices[0].finish_reason, seenTerminal: seenTerminalFinishReason });
       return { json: JSON.stringify({ kind: 'ok', completion, copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
     };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
@@ -920,7 +881,6 @@ Module._load = function (request, parent, isMain) {
     async function _buildAuthInfo(token, hostUri) {
       let login = null;
       let copilotUser = null;
-      _dbg('buildAuthInfo:start', { tokenHash: _tokenHash(token), hostUri });
       try {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const res = await globalThis.fetch(`${apiHost}/user`, {
@@ -928,9 +888,7 @@ Module._load = function (request, parent, isMain) {
           signal: AbortSignal.timeout(5000),
         });
         if (res.ok) login = (await res.json()).login;
-        _dbg('buildAuthInfo:/user', { status: res.status, login });
       } catch (e) {
-        _dbg('buildAuthInfo:/user:error', { err: e.message });
       }
       // copilot_internal/user から copilotUser 全体を取得して authInfo に含める。
       // app.js の Wa(authInfo) は authInfo.copilotUser.endpoints.api から CAPI base URL を導く。
@@ -947,18 +905,9 @@ Module._load = function (request, parent, isMain) {
           copilotUser = info;
           const apiUrl = info?.endpoints?.api;
           if (apiUrl && typeof apiUrl === 'string') process.env.COPILOT_API_URL = apiUrl;
-          _dbg('buildAuthInfo:/copilot_internal/user', {
-            status: r.status,
-            access_type_sku: info?.access_type_sku ?? null,
-            copilot_plan: info?.copilot_plan ?? null,
-            endpoints_api: apiUrl ?? null,
-            COPILOT_API_URL: process.env.COPILOT_API_URL ?? null,
-          });
         } else {
-          _dbg('buildAuthInfo:/copilot_internal/user', { status: r.status, ok: false });
         }
       } catch (e) {
-        _dbg('buildAuthInfo:/copilot_internal/user:error', { err: e.message });
       }
       // Copilot API token 取得（推論 API は OAuth token を受け付けないため交換が必要）
       let copilotToken = null;
@@ -974,14 +923,11 @@ Module._load = function (request, parent, isMain) {
           const td = await t.json();
           copilotToken = td.token || null;
           copilotTokenExpiry = copilotToken ? _normalizeCopilotTokenExpiry(td.expires_at) : 0;
-          _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null, copilotTokenExpiry });
         } else {
           let body = null;
           try { const raw = await t.text(); body = raw.length > 500 ? raw.slice(0, 500) + '…' : raw; } catch (_) {}
-          _dbg('buildAuthInfo:/copilot_internal/v2/token', { status: t.status, ok: false, body });
         }
       } catch (e) {
-        _dbg('buildAuthInfo:/copilot_internal/v2/token:error', { err: e.message });
       }
       return JSON.stringify({
         authInfo: { type: 'token', host: hostUri, token, login, copilotUser },
@@ -1001,10 +947,6 @@ Module._load = function (request, parent, isMain) {
           )
         : null) || 'https://github.com').replace(/\/+$/, '');
       if (entry.cachedInfo !== null && (entry.cachedToken !== token || entry.cachedHost !== hostUri)) {
-        _dbg('resolveOrCache:cache-invalidate', {
-          reason: entry.cachedToken !== token ? 'token-changed' : 'host-changed',
-          oldTokenHash: _tokenHash(entry.cachedToken), newTokenHash: _tokenHash(token),
-        });
         entry.cachedInfo = null;
         entry.pendingInfo = null;
         entry.copilotToken = null;
@@ -1014,7 +956,6 @@ Module._load = function (request, parent, isMain) {
         delete process.env.COPILOT_API_URL;
       }
       if (entry.cachedInfo !== null) {
-        _dbg('resolveOrCache:cache-hit', { tokenHash: _tokenHash(token) });
         return entry.cachedInfo;
       }
       if (!entry.pendingInfo) {
@@ -1099,16 +1040,10 @@ Module._load = function (request, parent, isMain) {
         return info;
       }).catch(err => {
         if (entry.gen === gen) entry.pendingInfo = null;
-        _dbg('authManagerSwitchToAuth:error', { err: err.message });
       });
       await entry.pendingInfo;
-      _dbg('authManagerSwitchToAuth:done', {
-        tokenHash: _tokenHash(token), hostUri,
-        COPILOT_API_URL_after: process.env.COPILOT_API_URL ?? null,
-      });
     };
     result.authManagerLoginUser = async function(uuid, host, login, token) {
-      _dbg('authManagerLoginUser:start', { host, login, tokenHash: _tokenHash(token) });
       const entry = _authMgr.get(uuid);
       if (!entry || !token) return;
       const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
@@ -1371,28 +1306,12 @@ Module._load = function (request, parent, isMain) {
 // 差し替えるのを阻止する。linuxmusl-arm64/runtime.node の Rust ネットワークスタックは
 // bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
 // GitHub OAuth token via env var or gh CLI (keychain unavailable on bionic)
-// --- AUTH デバッグ計装 ---
-// COPILOT_TERMUX_DEBUG_AUTH=1 を設定すると認証の各ステップを stderr に JSON で出力する。
-// token はセキュリティのため先頭8文字のみ表示。
-const _authDebug = process.env.COPILOT_TERMUX_DEBUG_AUTH === '1';
-function _dbg(event, data) {
-  if (!_authDebug) return;
-  process.stderr.write('[copilot-termux-auth] ' + JSON.stringify({ event, ...data, ts: new Date().toISOString() }) + '\n');
-}
-function _tokenHash(t) { return t ? t.slice(0, 8) + '...' : null; }
-const _COPILOT_TOKEN_DEFAULT_TTL_MS = 28 * 60 * 1000;
-function _normalizeCopilotTokenExpiry(expiresAt, now = Date.now()) {
-  const parsed = expiresAt ? Date.parse(expiresAt) : NaN;
-  return Number.isFinite(parsed) && parsed > now ? parsed : now + _COPILOT_TOKEN_DEFAULT_TTL_MS;
-}
-// --- end 計装 ---
 
 async function _readGhToken(env) {
   const envToken =
     (env && (env.GITHUB_TOKEN || env.GH_TOKEN || env.COPILOT_GITHUB_TOKEN)) ||
     process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN;
   if (envToken) {
-    _dbg('readGhToken', { source: 'env', tokenHash: _tokenHash(envToken) });
     return envToken;
   }
   try {
@@ -1402,10 +1321,8 @@ async function _readGhToken(env) {
         resolve(err ? null : (stdout.trim() || null));
       });
     });
-    _dbg('readGhToken', { source: ghToken ? 'gh-cli' : 'null', tokenHash: _tokenHash(ghToken) });
     return ghToken;
   } catch (_) {
-    _dbg('readGhToken', { source: 'error', tokenHash: null });
     return null;
   }
 }
