@@ -108,43 +108,6 @@ Module._load = function (request, parent, isMain) {
     if (typeof result.networkFetchGetExtraCaPems === 'function') {
       result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
     }
-    // modelsFilterToPicker: native-first。native 結果をそのまま返す。
-    // Free/Student: 2026-06-24 から model picker 廃止。全モデル model_picker_enabled=false → native が [] → auto mode のみ。
-    // policy.state=enabled の fallback は model_picker_enabled=false のモデルを picker に出し 400 を招くため廃止。
-    // Enterprise: native が非空インデックス配列を返す → そのまま使用。
-    if (typeof result.modelsFilterToPicker === 'function') {
-      const _nativeModelsFilterToPicker = result.modelsFilterToPicker;
-      result.modelsFilterToPicker = function(modelsJson) {
-        const nativeResult = _nativeModelsFilterToPicker(modelsJson);
-        _dbg('modelsFilterToPicker', { nativeCount: Array.isArray(nativeResult) ? nativeResult.length : -1 });
-        return nativeResult;
-      };
-    }
-    // modelResolverFirstAvailableDefaultFromOrder: native は JS-side capiClientListModels を
-    // 知らないため、モデルリストが空の状態で呼ばれると null を返す（Free で発生）。
-    // JS fallback: _modelListCache に goldeneye-free-auto が存在する場合のみ返す。
-    // 汎用 policyEnabled fallback は model_picker_enabled=false のモデルを選び 400 を招くため不使用。
-    if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
-      const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
-      result.modelResolverFirstAvailableDefaultFromOrder = function(authInfoJson, isGptEnabled) {
-        const r = _nativeModelResolver(authInfoJson, isGptEnabled);
-        if (r != null) return r;
-        if (!_modelListCache || _modelListCache.length === 0) {
-          _dbg('modelResolver:fallback', { reason: 'no-cache' });
-          return null;
-        }
-        const auto = _modelListCache.find(m =>
-          m && m.id === 'goldeneye-free-auto' &&
-          m.policy && m.policy.state === 'enabled'
-        );
-        if (auto) {
-          _dbg('modelResolver:fallback', { chosen: 'goldeneye-free-auto', from: 'auto-model' });
-          return auto.id;
-        }
-        _dbg('modelResolver:fallback', { reason: 'no-auto-model' });
-        return null;
-      };
-    }
     // authGetCopilotApiUrl: type=token/env/user/gh-cli/api-key では native が null を返す。
     // _b() はこれを見て models=[] を返しモデル選択が "No supported model" になる。
     // OAuth token でも標準 copilot API URL は固定のため、null 時はデフォルト URL を返す。
@@ -200,6 +163,8 @@ Module._load = function (request, parent, isMain) {
         }
         // /models fetch は常に標準 CAPI（Enterprise proxy URL では 421 になるため固定）。
         // copilotUrl（推論エンドポイント）も標準 CAPI 固定（ce7199a で Enterprise 動作確認済み）。
+        // Free アカウントは api.individual.githubcopilot.com を /copilot_internal/user で取得するが、
+        // 推論は api.githubcopilot.com 経由でも動作する（Copilot token で認証）。
         const fetchUrl = 'https://api.githubcopilot.com';
         const copilotUrl = 'https://api.githubcopilot.com';
         _dbg('capiClientListModels:fetch', { fetchUrl, copilotUrl });
@@ -217,7 +182,6 @@ Module._load = function (request, parent, isMain) {
         const data = await res.json();
         const raw = Array.isArray(data) ? data : (data.data ?? data.models ?? []);
         const models = Array.isArray(raw) ? raw : [];
-        _modelListCache = models;
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
@@ -615,7 +579,6 @@ Module._load = function (request, parent, isMain) {
     };
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
-    let _modelListCache = null; // capiClientListModels が取得したモデルリストキャッシュ（modelResolver fallback 用）
 
     result.authManagerCreate = function(uuid, hostUri, userAgent, path, normSpec, header, envVar, disableAutoLogin) {
       _authMgr.set(uuid, { cachedInfo: null, pendingInfo: null, cachedToken: null, cachedHost: null, gen: 0, copilotToken: null, copilotTokenExpiry: 0 });
@@ -672,7 +635,7 @@ Module._load = function (request, parent, isMain) {
         const apiHost = hostUri.replace('https://github.com', 'https://api.github.com');
         const t = await globalThis.fetch(`${apiHost}/copilot_internal/v2/token`, {
           method: 'GET',
-          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}` },
+          headers: { Authorization: `token ${token}`, 'User-Agent': `copilot-termux/${_pkgVersion}`, 'Copilot-Integration-Id': 'copilot-chat' },
           signal: AbortSignal.timeout(5000),
         });
         if (t.ok) {
@@ -681,7 +644,9 @@ Module._load = function (request, parent, isMain) {
           if (td.expires_at) copilotTokenExpiry = Date.parse(td.expires_at);
           _dbg('buildAuthInfo:/copilot_internal/v2/token', { ok: !!copilotToken, expiresAt: td.expires_at ?? null });
         } else {
-          _dbg('buildAuthInfo:/copilot_internal/v2/token', { status: t.status, ok: false });
+          let body = null;
+          try { body = await t.text(); } catch (_) {}
+          _dbg('buildAuthInfo:/copilot_internal/v2/token', { status: t.status, ok: false, body });
         }
       } catch (e) {
         _dbg('buildAuthInfo:/copilot_internal/v2/token:error', { err: e.message });
@@ -768,14 +733,13 @@ Module._load = function (request, parent, isMain) {
     result.authManagerGetLastAuthErrors = function(uuid) { return []; };
     result.authManagerClearCache = function(uuid) {
       const e = _authMgr.get(uuid);
-      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
+      if (e) { e.gen++; e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; delete process.env.COPILOT_API_URL; }
     };
     result.authManagerSwitchToAuth = async function(uuid, authInfoJson, token) {
       const entry = _authMgr.get(uuid);
       if (!entry) return;
-      // Clear stale enterprise endpoint, model cache, and auth cache regardless of token presence
+      // Clear stale enterprise endpoint and auth cache regardless of token presence
       delete process.env.COPILOT_API_URL;
-      _modelListCache = null;
       const gen = ++entry.gen;
       entry.cachedInfo = null;
       entry.cachedToken = null;
@@ -812,7 +776,6 @@ Module._load = function (request, parent, isMain) {
       if (!entry || !token) return;
       const hostUri = (host || 'https://github.com').replace(/\/+$/, '');
       _loginTokens.set(`${hostUri}:${login || ''}`, token);
-      _modelListCache = null;
       delete process.env.COPILOT_API_URL;
       const gen = ++entry.gen;
       entry.pendingInfo = _buildAuthInfo(token, hostUri).then(info => {
@@ -835,7 +798,7 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerLogout = async function(uuid, authInfoJson) {
       const e = _authMgr.get(uuid);
-      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; _modelListCache = null; delete process.env.COPILOT_API_URL; }
+      if (e) { e.cachedInfo = null; e.pendingInfo = null; e.cachedToken = null; e.cachedHost = null; e.copilotToken = null; e.copilotTokenExpiry = 0; delete process.env.COPILOT_API_URL; }
       return true;
     };
     result.authManagerRefreshCopilotUser = async function(uuid) {
