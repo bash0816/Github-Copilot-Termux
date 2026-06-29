@@ -198,29 +198,6 @@ Module._load = function (request, parent, isMain) {
         return [];
       };
     }
-    // modelResolverFirstAvailableDefaultFromOrder: native が null の場合のみ、
-    // authInfoJson（= i$ が渡すモデルリスト JSON）から auto モード用 fallback を選ぶ。
-    // native が non-null の場合はそのまま返す（Enterprise 保護）。
-    // gpt-4o-mini/gpt-4o は /chat/completions で Free 実機 200 OK 確認済み。
-    // auto モード内部でのみ使用（modelsFilterToPicker とは独立・ユーザーには見えない）。
-    if (typeof result.modelResolverFirstAvailableDefaultFromOrder === 'function') {
-      const _nativeModelResolver = result.modelResolverFirstAvailableDefaultFromOrder;
-      result.modelResolverFirstAvailableDefaultFromOrder = function(...args) {
-        const r = _nativeModelResolver.apply(this, args);
-        if (r != null) return r;
-        const [authInfoJson] = args;
-        try {
-          const models = JSON.parse(authInfoJson);
-          if (Array.isArray(models)) {
-            for (const id of ['gpt-4o-mini', 'gpt-4o']) {
-              const m = models.find(m => m?.id === id && m?.policy?.state !== 'disabled');
-              if (m) return m.id;
-            }
-          }
-        } catch (_) {}
-        return null;
-      };
-    }
     // capiClientListModels を Node.js fetch で実装（Rust tokio SIGSEGV 回避）
     // _selectCapiUrl: COPILOT_API_URL が api.individual.githubcopilot.com（Free プラン専用 direct endpoint）の
     // 場合のみそれを使う。Enterprise proxy URL（api.business.githubcopilot.com 等）では /models が 421 に
