@@ -111,6 +111,18 @@ Module._load = function (request, parent, isMain) {
       if (typeof result.networkFetchGetExtraCaPems === 'function') {
         result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
       }
+      if (typeof result.sessionSqliteOpen === 'function') {
+        result.sessionSqliteOpen = () => 1;
+      }
+      if (typeof result.sessionSqliteQuery === 'function') {
+        result.sessionSqliteQuery = () => ({ rows: '[]' });
+      }
+      if (typeof result.sessionSqliteRun === 'function') {
+        result.sessionSqliteRun = () => ({ rowsAffected: 0, lastInsertRowid: null });
+      }
+      if (typeof result.sessionSqliteFileExists === 'function') {
+        result.sessionSqliteFileExists = () => false;
+      }
     }
     // agentsResolveToolAliases: v1.0.65 新規追加ネイティブ関数。
     // Free ユーザーのチャット時に呼ばれ、Bionic で誤ったインデックスを返すと
@@ -257,18 +269,6 @@ Module._load = function (request, parent, isMain) {
         const rateHeaders = [...res.headers.entries()].map(([name, value]) => ({name, value}));
         return {modelsJson: JSON.stringify(models), copilotUrl, usageRatelimitHeaders: rateHeaders, capturedAssignmentContext: undefined};
       };
-    }
-    if (typeof result.sessionSqliteOpen === 'function') {
-      result.sessionSqliteOpen = () => 1;
-    }
-    if (typeof result.sessionSqliteQuery === 'function') {
-      result.sessionSqliteQuery = () => ({ rows: '[]' });
-    }
-    if (typeof result.sessionSqliteRun === 'function') {
-      result.sessionSqliteRun = () => ({ rowsAffected: 0, lastInsertRowid: null });
-    }
-    if (typeof result.sessionSqliteFileExists === 'function') {
-      result.sessionSqliteFileExists = () => false;
     }
     // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
     // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
@@ -567,9 +567,16 @@ Module._load = function (request, parent, isMain) {
       _jsStreams.set(streamId, { events, index: 0, finalMessage });
       return { json: JSON.stringify({ bodyText: null, status: res.status, statusText: res.statusText, headers, streamId }) };
     };
+    // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
+    // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
+    // networkFetchStreamStart → { requestId, response: Promise<{handle,url,status,statusText,headers}> }
+    // networkFetchStreamRead   → Promise<{ done, body?: Uint8Array }>
+    // networkFetchStreamClose  → void
+    // networkFetchRequestCancel → void
+    const _nfMap = new Map();
+    let _nfIdSeq = 3e6;
 
-    // Helper: convert Anthropic SSE event → chunkContext for processAnthropicStreamingChunkContext
-    function _toChunkContext(event, streamId) {
+    result.networkFetchStreamStart = function(req) {
       const base = { content: '', size: 0, chunkBoundary: false, messageStart: false, streamingId: streamId };
       if (!event || !event.type) return base;
       switch (event.type) {
