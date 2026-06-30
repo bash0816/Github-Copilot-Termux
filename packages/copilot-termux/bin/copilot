@@ -13,6 +13,7 @@ PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 CACHE_DIR="${HOME}/.copilot-termux"
 CURRENT="${CACHE_DIR}/current"
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 
 if [ ! -d "${CURRENT}" ]; then
   echo "[copilot-termux] Not set up. Run: copilot-termux setup" >&2
@@ -30,40 +31,28 @@ if [ -d "${MXC_WRAP}/arm64" ] && [ -x "${MXC_WRAP}/arm64/lxc-exec" ]; then
   export MXC_BIN_DIR="${MXC_WRAP}"
 fi
 
-if [ -n "${MAGI_NODE:-}" ]; then
-  MAGI_NODE_VERSION="$("${MAGI_NODE}" --version 2>/dev/null || true)"
-  MAGI_NODE_MAJOR=""
-  if [ -n "${MAGI_NODE_VERSION}" ]; then
-    MAGI_NODE_VERSION="${MAGI_NODE_VERSION#v}"
-    MAGI_NODE_MAJOR="${MAGI_NODE_VERSION%%.*}"
-  fi
+# glibc mode: use glibc Node.js + glibc runtime.node (no platform-patch.js, no bionic-compat.so)
+_GLIBC_LD="${PREFIX}/glibc/lib/ld-linux-aarch64.so.1"
+_GLIBC_LIBS="${PREFIX}/glibc/lib"
+_GLIBC_RUNTIME="${CURRENT}/prebuilds/linux-arm64/runtime.node"
+_GLIBC_NODE_AUTO="${CACHE_DIR}/glibc-node/node"
 
-  case "${MAGI_NODE_MAJOR}" in
-    ''|*[!0-9]*)
-      echo "[copilot-termux] MAGI_NODE version check failed; falling back to node" >&2
-      LD_PRELOAD="${PRELOAD}" exec node \
-        --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-        "${COPILOT_INDEX}" \
-        "$@"
-      ;;
-  esac
+_USE_GLIBC_NODE=""
+if [ -n "${MAGI_NODE:-}" ] && [ -x "${MAGI_NODE}" ]; then
+  _USE_GLIBC_NODE="${MAGI_NODE}"
+elif [ -x "${_GLIBC_NODE_AUTO}" ]; then
+  _USE_GLIBC_NODE="${_GLIBC_NODE_AUTO}"
+fi
 
-  if [ "${MAGI_NODE_MAJOR}" -lt 24 ]; then
-    echo "[copilot-termux] MAGI_NODE ${MAGI_NODE_VERSION} is below v24; falling back to node" >&2
-    LD_PRELOAD="${PRELOAD}" exec node \
-      --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-      "${COPILOT_INDEX}" \
-      "$@"
-  fi
-
-  exec env -u LD_LIBRARY_PATH \
-    LD_PRELOAD="${PRELOAD}" \
-    "${MAGI_NODE}" \
-    --require "${PACKAGE_DIR}/lib/platform-patch.js" \
+if [ -n "${_USE_GLIBC_NODE}" ] && [ -f "${_GLIBC_RUNTIME}" ] && [ -f "${_GLIBC_LD}" ]; then
+  exec env LD_PRELOAD="" \
+    "${_GLIBC_LD}" --library-path "${_GLIBC_LIBS}" \
+    "${_USE_GLIBC_NODE}" \
     "${COPILOT_INDEX}" \
     "$@"
 fi
 
+# bionic fallback: platform-patch.js stubs tokio-dependent native functions
 LD_PRELOAD="${PRELOAD}" exec node \
   --require "${PACKAGE_DIR}/lib/platform-patch.js" \
   "${COPILOT_INDEX}" \
