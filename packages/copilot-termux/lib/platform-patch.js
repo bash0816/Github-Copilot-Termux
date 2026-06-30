@@ -36,7 +36,8 @@ Module._resolveFilename = function (request, parent, isMain, options) {
     }
 
     // Redirect other linux-arm64 addons to linuxmusl-arm64 variants.
-    if (request.includes('linux-arm64')) {
+    // In glibc mode (COPILOT_TERMUX_GLIBC_MODE=1), skip redirect — glibc addons load natively.
+    if (request.includes('linux-arm64') && !process.env.COPILOT_TERMUX_GLIBC_MODE) {
       const muslReq = request.replace(/linux-arm64/g, 'linuxmusl-arm64');
       try {
         const resolved = origResolve(muslReq, parent, isMain, options);
@@ -64,6 +65,8 @@ Module._load = function (request, parent, isMain) {
       path.basename(request) === 'runtime.node') {
     if (result.__copilotTermuxPatched) return result;
     result.__copilotTermuxPatched = true;
+    // glibc mode: tokio runs natively, only JS stubs (authManager* etc.) are applied below.
+    if (process.env.COPILOT_TERMUX_GLIBC_MODE) return result;
     // Rust tokio を使う関数群を no-op に差し替え。
     // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
     // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
