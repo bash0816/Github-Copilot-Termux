@@ -32,7 +32,8 @@ Module._resolveFilename = function (request, parent, isMain, options) {
     // Redirect pty.node to our bundled Termux-native build.
     if (path.basename(request) === 'pty.node' &&
         (request.includes('linux-arm64') || request.includes('linuxmusl-arm64'))) {
-      if (fs.existsSync(NATIVE_PTY)) return NATIVE_PTY;
+      // glibc mode では bionic NDK pty.node を使わない（glibc Node との ABI 不整合）
+      if (!process.env.COPILOT_TERMUX_GLIBC_MODE && fs.existsSync(NATIVE_PTY)) return NATIVE_PTY;
     }
 
     // Redirect other linux-arm64 addons to linuxmusl-arm64 variants.
@@ -1038,20 +1039,23 @@ Module._load = function (request, parent, isMain) {
     };
     result.authManagerDestroy = function(uuid) { _authMgr.delete(uuid); };
 
-    result.authResolveAuthInfoFromToken = async function(token, hostUri, skipCache, userAgent) {
-      if (!token) return JSON.stringify(null);
-      let login = null;
-      try {
-        const apiHost = (hostUri || 'https://github.com').replace('://github.com', '://api.github.com');
-        const res = await globalThis.fetch(`${apiHost}/user`, {
-          headers: { Authorization: `token ${token}`, 'User-Agent': userAgent || `copilot-termux/${_pkgVersion}` },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) login = (await res.json()).login;
-      } catch (_) {}
-      const host = hostUri || 'https://github.com';
-      return JSON.stringify({ type: 'token', host, token, login, copilotUser: null });
-    };
+    if (!isGlibcMode && typeof result.authResolveAuthInfoFromToken === 'function') {
+      result.authResolveAuthInfoFromToken = async function(token, hostUri, skipCache, userAgent) {
+        if (!token) return JSON.stringify(null);
+        let login = null;
+        try {
+          const apiHost = (hostUri || 'https://github.com').replace('://github.com', '://api.github.com');
+          const res = await globalThis.fetch(`${apiHost}/user`, {
+            headers: { Authorization: `token ${token}`, 'User-Agent': userAgent || `copilot-termux/${_pkgVersion}` },
+            signal: AbortSignal.timeout(5000),
+          });
+          if (res.ok) login = (await res.json()).login;
+        } catch (_) {}
+        const host = hostUri || 'https://github.com';
+        return JSON.stringify({ type: 'token', host, token, login, copilotUser: null });
+      };
+    }
+    // glibc mode では native authResolveAuthInfoFromToken を使う（SSL_CERT_FILE で TLS 修正済み）
     // === end authManager* stubs ===
     // === tokenStore* JS stubs (bionic: tokio ThreadsafeFunction crash) ===
     // Verified tokens: set by authManagerLoginUser / _resolveOrCache after /user API check
@@ -1086,6 +1090,7 @@ Module._load = function (request, parent, isMain) {
     result.tokenStoreStoreCurrentTokenInConfig = async function() {};
     // === end tokenStore* stubs ===
 
+    if (!isGlibcMode) {
     // === urlManager* JS stubs ===
     const _urlMgr = new Map();
     let _urlSeq = 8e6;
@@ -1235,6 +1240,7 @@ Module._load = function (request, parent, isMain) {
       return { converged: true, applied: false, updated: false };
     };
     // === end ifcEngine* stubs ===
+    }
     // --- end JS model HTTP implementation ---
   }
 
