@@ -567,43 +567,6 @@ Module._load = function (request, parent, isMain) {
       _jsStreams.set(streamId, { events, index: 0, finalMessage });
       return { json: JSON.stringify({ bodyText: null, status: res.status, statusText: res.statusText, headers, streamId }) };
     };
-    // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
-    // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
-    // networkFetchStreamStart → { requestId, response: Promise<{handle,url,status,statusText,headers}> }
-    // networkFetchStreamRead   → Promise<{ done, body?: Uint8Array }>
-    // networkFetchStreamClose  → void
-    // networkFetchRequestCancel → void
-    const _nfMap = new Map();
-    let _nfIdSeq = 3e6;
-
-    result.networkFetchStreamStart = function(req) {
-      const base = { content: '', size: 0, chunkBoundary: false, messageStart: false, streamingId: streamId };
-      if (!event || !event.type) return base;
-      switch (event.type) {
-        case 'message_start':
-          return { ...base, messageStart: true };
-        case 'content_block_delta': {
-          const d = event.delta;
-          if (!d) return base;
-          if (d.type === 'text_delta') {
-            const t = d.text || '';
-            return { ...base, content: t, size: Buffer.byteLength(t, 'utf8') };
-          }
-          if (d.type === 'thinking_delta') {
-            const r = d.thinking || '';
-            return { ...base, reasoningContent: r, size: Buffer.byteLength(r, 'utf8') };
-          }
-          return base;
-        }
-        case 'content_block_stop':
-        case 'message_delta':
-        case 'message_stop':
-          return { ...base, chunkBoundary: true };
-        default:
-          return base;
-      }
-    }
-
     // 5. modelHttpStreamNextAnthropicMessageEvent → yield events one by one
     result.modelHttpStreamNextAnthropicMessageEvent = async function(streamId, accId) {
       const st = _jsStreams.get(streamId);
