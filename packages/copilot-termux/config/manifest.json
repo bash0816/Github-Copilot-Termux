@@ -4,5 +4,9 @@
     "package": "@github/copilot-linuxmusl-arm64",
     "version": "1.0.65",
     "integrity": "sha512-xccQeJSR45xyoaL7J5mZjtU++dmte+ZCDQkIlrpTn2yuMl2LWriBvorQ1P2MwVnXmIiW/GHi93B+lNtsybA9yw=="
+  },
+  "glibcNode": {
+    "version": "26.2.0",
+    "sha256": "bf52461d25017479cdc549642c4e7a2303ac5c5395d7c3d026d5d8b3fa283c05"
   }
 }
