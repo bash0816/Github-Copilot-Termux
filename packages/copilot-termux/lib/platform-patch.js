@@ -65,51 +65,52 @@ Module._load = function (request, parent, isMain) {
       path.basename(request) === 'runtime.node') {
     if (result.__copilotTermuxPatched) return result;
     result.__copilotTermuxPatched = true;
-    // glibc mode: tokio runs natively, only JS stubs (authManager* etc.) are applied below.
-    if (process.env.COPILOT_TERMUX_GLIBC_MODE) return result;
-    // Rust tokio を使う関数群を no-op に差し替え。
-    // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
-    // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
-    // jsonrpcServer* は拡張 JSON-RPC サーバー (ThreadsafeFunction)、
-    // lspClient* は LSP クライアント (ThreadsafeFunction)。
-    // featureFlagService* は同期 Rust のため除外（no-op にすると .handle クラッシュ）。
-    const TOKIO_PATTERN = /^(modelHttp|networkFetch|ahpRelay|websocketResponses|sessionStore|sessionSqlite|jsonrpcServer|lspClient)/;
-    for (const key of Object.keys(result)) {
-      if (TOKIO_PATTERN.test(key) && typeof result[key] === 'function') {
-        result[key] = () => undefined;
+    const isGlibcMode = !!process.env.COPILOT_TERMUX_GLIBC_MODE;
+    if (!isGlibcMode) {
+      // Rust tokio を使う関数群を no-op に差し替え。
+      // sessionStore*/sessionSqlite* は非同期 SQLite (tokio)、
+      // modelHttp*/networkFetch*/ahpRelay*/websocketResponses* は Rust HTTP (tokio)。
+      // jsonrpcServer* は拡張 JSON-RPC サーバー (ThreadsafeFunction)、
+      // lspClient* は LSP クライアント (ThreadsafeFunction)。
+      // featureFlagService* は同期 Rust のため除外（no-op にすると .handle クラッシュ）。
+      const TOKIO_PATTERN = /^(modelHttp|networkFetch|ahpRelay|websocketResponses|sessionStore|sessionSqlite|jsonrpcServer|lspClient)/;
+      for (const key of Object.keys(result)) {
+        if (TOKIO_PATTERN.test(key) && typeof result[key] === 'function') {
+          result[key] = () => undefined;
+        }
       }
-    }
-    // git*Async: Rust tokio async functions — type-safe stubs to prevent SIGSEGV.
-    // Returns empty/null values matching what app.js callers expect.
-    const GIT_ASYNC_STUBS = {
-      gitMutateAsync:             async () => undefined,
-      gitCommandAsync:            async () => '',
-      gitRemotesAsync:            async () => [],
-      gitDiffFileAsync:           async () => '',
-      gitHashFileAsync:           async () => [],
-      gitMergeBaseAsync:          async () => null,
-      gitDiffForRefAsync:         async () => '',
-      gitCurrentBranchAsync:      async () => null,
-      gitDefaultBranchAsync:      async () => null,
-      gitListWorktreesAsync:      async () => [],
-      gitBranchAndHeadAsync:      async () => null,
-      gitSubmodulePathsAsync:     async () => [],
-      gitUntrackedPathsAsync:     async () => [],
-      gitDiffNameStatusAsync:     async () => '',
-      gitStatusPorcelainAsync:    async () => '',
-      gitWorkingTreeStatusAsync:  async () => ({ hasUnstagedChanges: false, hasStagedChanges: false, hasUntrackedFiles: false }),
-      gitStatusPorcelainAllAsync: async () => null,
-      gitCurrentBranchRemoteAsync: async () => null,
-      gitWorkingTreeDiffStatsAsync: async () => ({ linesAdded: 0, linesRemoved: 0 }),
-    };
-    for (const [key, stub] of Object.entries(GIT_ASYNC_STUBS)) {
-      if (typeof result[key] === 'function') result[key] = stub;
-    }
-    if (typeof result.registerLogSink === 'function') {
-      result.registerLogSink = () => { throw new Error('[copilot-termux] registerLogSink disabled on bionic (no tokio thread)'); };
-    }
-    if (typeof result.networkFetchGetExtraCaPems === 'function') {
-      result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
+      // git*Async: Rust tokio async functions — type-safe stubs to prevent SIGSEGV.
+      // Returns empty/null values matching what app.js callers expect.
+      const GIT_ASYNC_STUBS = {
+        gitMutateAsync:             async () => undefined,
+        gitCommandAsync:            async () => '',
+        gitRemotesAsync:            async () => [],
+        gitDiffFileAsync:           async () => '',
+        gitHashFileAsync:           async () => [],
+        gitMergeBaseAsync:          async () => null,
+        gitDiffForRefAsync:         async () => '',
+        gitCurrentBranchAsync:      async () => null,
+        gitDefaultBranchAsync:      async () => null,
+        gitListWorktreesAsync:      async () => [],
+        gitBranchAndHeadAsync:      async () => null,
+        gitSubmodulePathsAsync:     async () => [],
+        gitUntrackedPathsAsync:     async () => [],
+        gitDiffNameStatusAsync:     async () => '',
+        gitStatusPorcelainAsync:    async () => '',
+        gitWorkingTreeStatusAsync:  async () => ({ hasUnstagedChanges: false, hasStagedChanges: false, hasUntrackedFiles: false }),
+        gitStatusPorcelainAllAsync: async () => null,
+        gitCurrentBranchRemoteAsync: async () => null,
+        gitWorkingTreeDiffStatsAsync: async () => ({ linesAdded: 0, linesRemoved: 0 }),
+      };
+      for (const [key, stub] of Object.entries(GIT_ASYNC_STUBS)) {
+        if (typeof result[key] === 'function') result[key] = stub;
+      }
+      if (typeof result.registerLogSink === 'function') {
+        result.registerLogSink = () => { throw new Error('[copilot-termux] registerLogSink disabled on bionic (no tokio thread)'); };
+      }
+      if (typeof result.networkFetchGetExtraCaPems === 'function') {
+        result.networkFetchGetExtraCaPems = () => ({ errors: [], pems: [] });
+      }
     }
     // agentsResolveToolAliases: v1.0.65 新規追加ネイティブ関数。
     // Free ユーザーのチャット時に呼ばれ、Bionic で誤ったインデックスを返すと
