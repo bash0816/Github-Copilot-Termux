@@ -38,7 +38,7 @@ AUTH-001 → copilotUser 不安定 → MODEL-001/002 の連鎖。AUTH-001 の解
 | 2 | **env token 最優先で切替が反映されない**。`gh auth switch` しても `GITHUB_TOKEN/GH_TOKEN` が残っていれば `_readGhToken` は同じ token を返し、`cachedToken!==token` が成立せずキャッシュ無効化されない | `:876-889`, `:554` | **高** |
 | 3 | **`authManagerGetCurrentAuthInfo` が token 再読込せず即返す**。`cachedInfo` があれば古い authInfo を返す | `:586-590` | 中 |
 | 4 | **`authManagerLoginUser` の catch が旧 cachedInfo を消さない**。login 失敗時に旧アカウントが生存し「切替したのに前のまま」 | `:637` | 中 |
-| 5 | **`authResolveAuthInfoFromToken` が常に `copilotUser:null`**。app.js がこの経路を使うと Mgn の権限フィルタが必ず欠落 | `:650-663` | 中（経路依存）|
+| 5 | ~~**`authResolveAuthInfoFromToken` が常に `copilotUser:null`**~~ ✅ bionic のみ JS stub（copilotUser:null）を適用。glibc mode では native を使用（SSL_CERT_FILE 修正済みのため TLS 動作）。2026-07-01 修正 | `:1042` | 解消 |
 
 > **注意**: token だけで切替を検知できない。free/enterprise ともに host=`https://github.com` で不変なので `cachedHost` は無力。
 > env token が固定の場合、token も不変になり得るため token 比較だけでは切替を検知できない。
