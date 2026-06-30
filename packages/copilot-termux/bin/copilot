@@ -45,7 +45,16 @@ elif [ -x "${_GLIBC_NODE_AUTO}" ]; then
 fi
 
 if [ -n "${_USE_GLIBC_NODE}" ] && [ -f "${_GLIBC_RUNTIME}" ] && [ -f "${_GLIBC_LD}" ]; then
+  _SSL_CERT="${PREFIX}/etc/ssl/certs/ca-certificates.crt"
+  _SSL_CERT_DIR="${PREFIX}/etc/ssl/certs"
+  if [ ! -r "${_SSL_CERT}" ]; then
+    echo "[copilot-termux] ERROR: CA bundle not readable: ${_SSL_CERT}" >&2
+    echo "[copilot-termux] Run: pkg install ca-certificates" >&2
+    exit 1
+  fi
   exec env LD_PRELOAD="" COPILOT_TERMUX_GLIBC_MODE=1 \
+    SSL_CERT_FILE="${_SSL_CERT}" \
+    SSL_CERT_DIR="${_SSL_CERT_DIR}" \
     "${_GLIBC_LD}" --library-path "${_GLIBC_LIBS}" \
     "${_USE_GLIBC_NODE}" \
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
