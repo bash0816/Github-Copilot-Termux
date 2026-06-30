@@ -45,8 +45,8 @@ elif [ -x "${_GLIBC_NODE_AUTO}" ]; then
 fi
 
 if [ -n "${_USE_GLIBC_NODE}" ] && [ -f "${_GLIBC_RUNTIME}" ] && [ -f "${_GLIBC_LD}" ]; then
-  _SSL_CERT="${PREFIX}/etc/ssl/certs/ca-certificates.crt"
-  _SSL_CERT_DIR="${PREFIX}/etc/ssl/certs"
+  _SSL_CERT="${PREFIX}/etc/tls/cert.pem"
+  _SSL_CERT_DIR="${PREFIX}/etc/tls"
   if [ ! -r "${_SSL_CERT}" ]; then
     echo "[copilot-termux] ERROR: CA bundle not readable: ${_SSL_CERT}" >&2
     echo "[copilot-termux] Run: pkg install ca-certificates" >&2
