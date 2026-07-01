@@ -25,6 +25,7 @@
     "bin",
     "lib/platform-patch.js",
     "lib/setup.js",
+    "lib/check-updates.js",
     "lib/bionic-compat.so",
     "lib/native/pty.node",
     "scripts/bionic-compat.c",

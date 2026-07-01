@@ -301,6 +301,49 @@ npm install @github/copilot-linuxmusl-arm64@1.0.65
 
 ---
 
+## UPDATE-002: `copilot update` が npm パッケージ自体を更新しない
+
+**重要度**: High  
+**影響バージョン**: 1.0.65-1 以前  
+**発見日**: 2026-07-02（VERIFY-REQUEST.md の TC 後に判明）
+
+### 症状
+
+```
+$ copilot update
+Update is not supported when running js directly.
+```
+
+`copilot-termux update` も `setup()` と同一で、npm パッケージ (`@bash0816/copilot-termux`) 自体は更新されない。
+
+### 根本原因
+
+- `bin/copilot` は `~/.copilot-termux/current/index.js` に `"$@"` を丸ごと渡す設計
+- upstream の `update` サブコマンドは「JS 直接実行モード」を検知してブロック
+- `bin/copilot-termux` の `update` は `setup()` と同一実装（内部 copilot バイナリの更新のみ）
+- `npm install -g @bash0816/copilot-termux@latest` を手動実行する手段しかなく、かつ `--prefix` を指定しないと正しいインストール先に入らない
+
+### ✅ 修正済み（2026-07-02）
+
+`lib/check-updates.js` を新規作成し、以下を実装：
+- npm registry から `latest` / `candidate` タグを確認してバージョン比較（semver 軽量自前実装）
+- prefix を `__dirname` から動的に取得（`path.resolve(__dirname, '../../../../..')`）して `npm install -g --prefix <prefix>` を実行
+- 24h TTL キャッシュで起動時の通知（`notify` モード）
+- npm 失敗時に手動コマンドを stderr に表示
+- `module.exports = { runUpdate, runNotify }` で `bin/copilot-termux` から利用可能
+
+`bin/copilot` は `CACHE_DIR` チェックより前に `update` をインターセプトして `check-updates.js` を呼ぶ。  
+`bin/copilot-termux` の `update` は `runUpdate()` にルーティング。
+
+**codex（gpt-5.5）レビュー指摘（2026-07-02）**:
+1. 🔴 prefix 導出が 2 段ずれ → `'../../../../..'` に修正
+2. 🔴 `copilot update` 挿入位置が CURRENT チェックより後 → 前に移動
+3. 🟡 semver 文字列比較で壊れる → 軽量自前実装
+4. 🟡 candidate タグの条件: stable ユーザーを candidate に上げない
+5. 🟡 notify は 24h TTL キャッシュ必須
+
+---
+
 ## バグ優先度サマリー
 
 | ID | 内容 | 重要度 | 修正前提 | 状態 |
@@ -309,6 +352,7 @@ npm install @github/copilot-linuxmusl-arm64@1.0.65
 | MODEL-001 | 権限外モデルが表示される | High | AUTH-001 | ✅ 修正済み・enterprise 実機確認済み |
 | MODEL-002 | MCP経由の権限取得が不安定 | High | AUTH-001 | -p モード確認済み。TUI モード未確認 |
 | UPDATE-001 | `/update`が`@github/copilot`を参照 | Medium | なし | ✅ 修正済み（commit 6bd05d6） |
+| UPDATE-002 | `copilot update` が npm パッケージ更新に非対応 | High | なし | ✅ 修正済み（2026-07-02） |
 | BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
 | MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | 🔜 未修正 |
 
