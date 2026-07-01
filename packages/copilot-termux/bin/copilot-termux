@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 const { setup } = require('../lib/setup');
+const { runUpdate } = require('../lib/check-updates');
 const cmd = process.argv[2];
-if (cmd === 'setup' || cmd === 'update') {
+if (cmd === 'setup') {
   setup().then(() => process.exit(0)).catch(e => { console.error(e.message); process.exit(1); });
+} else if (cmd === 'update') {
+  runUpdate().then(code => process.exit(code)).catch(e => { console.error(e.message); process.exit(1); });
 } else {
   console.log('Usage: copilot-termux <setup|update>');
 }

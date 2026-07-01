@@ -11,6 +11,11 @@ _COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
 [ -f "${_COMPAT}" ] || { echo '[copilot-termux] ERROR: lib/bionic-compat.so missing. Reinstall package.' >&2; exit 1; }
 PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
+if [ "${1:-}" = "update" ]; then
+  shift
+  exec node "${PACKAGE_DIR}/lib/check-updates.js" update "$@"
+fi
+
 CACHE_DIR="${HOME}/.copilot-termux"
 CURRENT="${CACHE_DIR}/current"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
