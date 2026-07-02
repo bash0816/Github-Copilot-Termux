@@ -31,6 +31,8 @@ function parseVer(v) {
   return { nums, pre };
 }
 
+// このプロジェクトの prerelease 表記は x.y.z-N（N は数字のみ）を前提としており、
+// 汎用 semver のような英数混在 prerelease 識別子の比較は想定していません。
 // returns negative if a < b, 0 if equal, positive if a > b
 function compareVersions(a, b) {
   const pa = parseVer(a);
@@ -143,12 +145,7 @@ async function runUpdate() {
     return 1;
   }
   if (!targetVer) {
-    if (isPrerelease(currentVersion)) {
-      console.error(`No newer candidate or stable version available: ${currentVersion}`);
-      console.error(`To rollback to stable: DISABLE_INSTALLATION_CHECKS=true npm install -g --prefix ${npmPrefix} ${packageName}@latest`);
-    } else {
-      console.error(`Already on latest version: ${currentVersion}`);
-    }
+    console.error(`Already on latest version: ${currentVersion}`);
     return 0;
   }
   return installVersion(targetVer);

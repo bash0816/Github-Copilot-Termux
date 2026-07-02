@@ -342,6 +342,28 @@ Update is not supported when running js directly.
 4. 🟡 candidate タグの条件: stable ユーザーを candidate に上げない
 5. 🟡 notify は 24h TTL キャッシュ必須
 
+### スモークテスト追加（2026-07-02）
+
+これまで `copilot update` 機能のスモークテストが一度も実施されていませんでした。
+今回、`docs/SMOKE-TEST.md` に UPDATE-002 対応テストケース **TC-U1〜U8** を追加しました。
+テスト対象と期待動作の詳細は [docs/SMOKE-TEST.md#copilot-update-機能のテストケース-update-002](./SMOKE-TEST.md#copilot-update-機能のテストケース-update-002) を参照してください。
+
+### 追加バグ修正（2026-07-02）
+
+`runUpdate()` 内の `!targetVer` 分岐で問題が判明しました。
+
+**問題**: ローカル開発ビルドが npm registry 公開版より進んでいる **正常な状態** で、
+以前の実装が `isPrerelease(currentVersion)` 判定により「rollback to stable」という
+誤ったメッセージを出していました。
+
+**原因**: `!targetVer` 判定時に `isPrerelease(currentVersion)` 分岐が存在し、
+ローカルが prerelease 表記を持つ場合に誤った rollback 案内が出るロジックでした。
+
+**修正**: 常に `Already on latest version: ${currentVersion}` で統一。
+registry より新しいローカルビルドの状態を正しく「最新版」として表示します。
+
+GPT-5.5 コードレビューで Go 判定を得ました。詳細は TC-U2（ローカル > registry）を参照。
+
 ---
 
 ## バグ優先度サマリー
@@ -355,6 +377,22 @@ Update is not supported when running js directly.
 | UPDATE-002 | `copilot update` が npm パッケージ更新に非対応 | High | なし | ✅ 修正済み（2026-07-02） |
 | BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
 | MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | 🔜 未修正 |
+
+### 他プロジェクト(ClaudeCode-Termux-private)由来バグの横展開確認（2026-07-02）
+
+ユーザーからの指摘で、`CluadeCode-Termux-private` issue #16・#7 と同種のバグが
+copilot-termux にもないか確認した。**いずれも該当なし。**
+
+- **issue #16**（`installTarget()` が `--prefix` なしで `npm install -g` を実行するため、
+  `~/.local` 等の非標準 prefix 環境で実際に使われているバイナリが更新されない）
+  → copilot-termux の `check-updates.js` は `__dirname` から prefix を動的導出し、
+  `installVersion()` で常に `--prefix` を渡す実装に既になっている（本ファイル内
+  UPDATE-002 の GPT-5.5 レビュー指摘1で「prefix 導出が2段ずれ」を修正済み）。
+  再現条件（非標準 prefix 未対応）に当たらない。
+- **issue #7**（レガシー typo パッケージ名 `@bash0816/cluade-code` が `installTarget()` に
+  残ってしまい、canonical 名へ移行できない）
+  → copilot-termux にはリネーム・typo の歴史がなく、`pkg.name` がそのまま
+  正式名 `@bash0816/copilot-termux` のため該当しない。
 
 ## 残作業
 

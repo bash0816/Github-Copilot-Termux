@@ -1,28 +1,21 @@
-name: Promote and publish
+name: Promote and publish (DEPRECATED)
+
+# This workflow is deprecated. Use npm-package.yml with retag_latest=true instead.
+# Kept for reference only - do not use.
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to promote to latest'
-        required: true
-      npm_tag:
-        description: 'npm tag'
-        default: 'latest'
+      _note:
+        description: 'DEPRECATED: Use npm-package.yml with retag_latest=true instead'
+        required: false
 
 jobs:
-  promote-and-publish:
+  deprecated:
     runs-on: ubuntu-latest
-    environment: npm-publish
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-      - name: Promote to latest
+      - name: Fail with deprecation message
         run: |
-          npm dist-tag add @bash0816/copilot-termux@${{ inputs.version }} ${{ inputs.npm_tag }}
-          npm dist-tag add @bash0816/copilot-termux@${{ inputs.version }} previous_stable
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          echo "ERROR: This workflow is deprecated."
+          echo "Use 'npm package' workflow with retag_latest=true instead."
+          exit 1

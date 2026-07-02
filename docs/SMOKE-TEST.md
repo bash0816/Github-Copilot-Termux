@@ -127,6 +127,151 @@ copilot -p "1+1は"
 
 ---
 
+### copilot update 機能のテストケース (UPDATE-002)
+
+#### TC-U1: registry に新バージョンあり → 実際にインストール実行
+
+前提: 現在のローカルバージョン < npm registry latest
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- `Updating to <新バージョン>...` メッセージが stderr に表示される
+- `npm install -g --prefix <prefix> @bash0816/copilot-termux@<新バージョン>` が実行される
+- インストール成功時は exit 0
+- インストール失敗時は手動実行コマンドが stderr に表示されて exit 1
+
+**確認ポイント**:
+- ✅ 実際にローカル package.json のバージョンが更新されていること
+- ❌ rollback メッセージが出ないこと
+
+---
+
+#### TC-U2: ローカル > registry (latest/candidate) → 誤った rollback 案内なし
+
+前提: ローカルが npm registry より進んでいる（開発ビルド状態）
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- `Already on latest version: <ローカルバージョン>` メッセージが stderr に表示される
+- exit 0（正常終了）
+- 「rollback to stable」のような誤った案内は出ない
+
+**確認ポイント**:
+- 🔴 バグ修正確認: 以前は `runUpdate()` の `!targetVer && isPrerelease(currentVersion)` 分岐で誤った rollback メッセージが出ていた。修正後は常に `Already on latest version` で統一
+
+---
+
+#### TC-U3: ローカルと registry が同一バージョン → 更新なし
+
+前提: ローカル `1.0.65` = registry latest `1.0.65`
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- `Already on latest version: 1.0.65` メッセージが stderr に表示される
+- exit 0（正常終了）
+
+---
+
+#### TC-U4: registry 取得失敗（ネットワーク切断等）
+
+前提: ネットワーク切断または npm registry が一時的に不可用
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- `Failed to check for updates: <エラー理由>` メッセージが stderr に表示される
+- `Run manually: DISABLE_INSTALLATION_CHECKS=true npm install -g --prefix <prefix> @bash0816/copilot-termux@latest` が stderr に表示される
+- exit 1（エラー終了）
+
+**確認ポイント**:
+- ❌ クラッシュしないこと
+
+---
+
+#### TC-U5: 安定版（prerelease でない）では candidate を見ない
+
+前提: ローカル `1.0.65`（prerelease なし）、registry: latest `1.0.64`、candidate `1.0.66-1`
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- candidate `1.0.66-1` より新しいという判定をしない
+- `Already on latest version: 1.0.65` を表示
+- exit 0
+
+**確認ポイント**:
+- `resolveTarget()` の判定: `isPrerelease(currentVersion)` が false のため candidate fetch を実行しない（L102-112 の条件）
+
+---
+
+#### TC-U6: prerelease 表記のローカルでは candidate と latest のうちより新しい方へ更新
+
+前提: ローカル `1.0.65-1`（prerelease）、registry: latest `1.0.64`、candidate `1.0.66-1`
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- candidate タグも取得して比較（L102-112）
+- latest `1.0.64` と candidate `1.0.66-1` のうち newer である `1.0.66-1` へ更新しようとする
+- または「latest より新しいバージョンが candidate にあれば candidate へ」という判定
+
+**確認ポイント**:
+- `compareVersions('1.0.66-1', '1.0.64') > 0` が true になっていること
+
+---
+
+#### TC-U7: latest 取得成功・candidate 取得失敗 → latest のみで処理継続
+
+前提: npm registry から latest は取得できるが candidate が 404（存在しない）
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update
+```
+
+**期待動作**:
+- candidate fetch が失敗しても無視（L109-111 の catch）
+- latest のバージョン比較のみで判定を続ける
+- エラーメッセージは出ない（正常動作）
+- exit 0 または 1（バージョン比較結果による）
+
+**確認ポイント**:
+- ❌ candidate タグの取得失敗で全体が fail しないこと
+
+---
+
+#### TC-U8: `--dry-run` フラグで実際のインストール実行なし・コマンド文字列のみ出力
+
+```bash
+node packages/copilot-termux/lib/check-updates.js update --dry-run
+```
+
+**期待動作**:
+- 正確な `npm install -g --prefix <prefix> @bash0816/copilot-termux@<version>` コマンド文字列が stdout に出力される
+- npm install は実際には実行されない（stdio='inherit' されない）
+- exit 0
+
+**確認ポイント**:
+- prefix が正しく動的導出されていること（`path.resolve(__dirname, '../../../../..')`で 5 段上）
+- インストール対象パッケージ名が `@bash0816/copilot-termux` であること
+- version が registry から取得した target version であること
+
+---
+
 ## デバッグログの確認方法
 
 詳細ログを有効にして起動:

@@ -1,38 +1,21 @@
-name: Retag latest
+name: Retag latest (DEPRECATED)
+
+# This workflow is deprecated. Use npm-package.yml with retag_latest=true instead.
+# Kept for reference only - do not use.
 
 on:
   workflow_dispatch:
     inputs:
-      target_version:
-        description: 'Version to set as @latest (e.g. 1.0.63)'
-        required: true
-      current_latest:
-        description: 'Expected current @latest (safety check)'
-        required: true
+      _note:
+        description: 'DEPRECATED: Use npm-package.yml with retag_latest=true instead'
+        required: false
 
 jobs:
-  retag:
+  deprecated:
     runs-on: ubuntu-latest
-    environment: npm-publish
     steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Safety check and retag
+      - name: Fail with deprecation message
         run: |
-          set -euo pipefail
-          PACKAGE="@bash0816/copilot-termux"
-          CURRENT=$(npm view "$PACKAGE" dist-tags.latest)
-          echo "Current @latest: $CURRENT"
-          echo "Expected:        ${{ inputs.current_latest }}"
-          if [ "$CURRENT" != "${{ inputs.current_latest }}" ]; then
-            echo "ERROR: current @latest mismatch. Aborting."
-            exit 1
-          fi
-          npm dist-tag add "${PACKAGE}@${{ inputs.target_version }}" latest
-          echo "Done. New @latest:"
-          npm view "$PACKAGE" dist-tags
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          echo "ERROR: This workflow is deprecated."
+          echo "Use 'npm package' workflow with retag_latest=true instead."
+          exit 1
