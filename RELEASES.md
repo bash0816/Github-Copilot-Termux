@@ -1,4 +1,31 @@
-## 1.0.65 — 2026-06-28 🚀 Latest / 最新版
+## 1.0.65-1 — 2026-07-03 🚀 Latest / 最新版
+
+upstream `@github/copilot@1.0.65` 追従（wrapper バージョンは `1.0.65-1`）。1.0.65 の既知問題を修正。
+
+**修正内容**
+
+- **TUI login regression**: glibc mode で TUI ログインが失敗する問題を修正（`isGlibcMode` 分岐の見直し、CA証明書パス修正、SQLite handle エラー修正、pty.node ABI 修正）
+- **`/update` 実行時の参照先修正**（UPDATE-001）: インストールコマンドが upstream 公式パッケージ（`@github/copilot`）を指していたのを `@bash0816/copilot-termux`（fork）を指すよう修正
+- **起動時通知バナーの誤表示修正**（UPDATE-003）: upstream 公式リポジトリの新バージョンを fork ユーザーに通知してしまう問題を修正（バナー自体を無効化）
+- **`copilot update` / `copilot-termux update` の自己更新対応**（UPDATE-002）: それまで npm パッケージ自体を更新できなかった問題を修正。ダウングレード防止・rollback誤案内の修正込み
+
+**既知の問題（Low・実害小・次回対応）**
+
+- `/update` 実行時に表示される changelog（更新内容の説明文）が upstream 公式版のまま。
+  実際にインストールされる npm コマンドは fork を正しく指しているため、誤ったパッケージが
+  インストールされることはない（UPDATE-004、詳細は `docs/KNOWN-BUGS.md`）
+
+### Install
+
+```sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+```
+
+---
+
+## 1.0.65 — 2026-06-28 ⚠️ Superseded by 1.0.65-1 / 1.0.65-1 に置き換え済み
 
 upstream `@github/copilot@1.0.65` 追従。
 
@@ -16,7 +43,7 @@ copilot --version
 
 ---
 
-## 1.0.63 — 2026-06-22 ✅ Current stable / 現在の安定版
+## 1.0.63 — 2026-06-22 candidate（rollback用） / candidateタグ・rollback用
 
 upstream `@github/copilot@1.0.63` 追従。Termux bionic 互換パッチ全面適用。
 
