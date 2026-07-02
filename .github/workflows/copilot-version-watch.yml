@@ -101,33 +101,96 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
           AUDIT_RESULT: ${{ steps.napi_audit.outputs.audit_result }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           node -e '
             const audit = JSON.parse(process.env.AUDIT_RESULT);
             const version = process.env.NEW_VERSION;
+            const serverUrl = process.env.GITHUB_SERVER_URL;
+            const repository = process.env.GITHUB_REPOSITORY;
+            const runId = process.env.GITHUB_RUN_ID;
+
+            const SAFE_LIMIT = 50000;
             const lines = [];
+
+            // Header section
             lines.push(`copilot@${version} の NAPI 監査結果`);
             lines.push("");
             lines.push(`newTokio: ${audit.newTokio.length}`);
             lines.push(`newPendingGitAsync: ${audit.newPendingGitAsync.length}`);
             lines.push(`newUnknown: ${audit.newUnknown.length}`);
             lines.push("");
-            if (audit.newTokio.length) {
-              lines.push("## newTokio");
-              lines.push(...audit.newTokio.map((v) => `- ${v}`));
-              lines.push("");
+
+            const sections = [
+              {
+                name: "newTokio",
+                title: "## newTokio",
+                items: audit.newTokio
+              },
+              {
+                name: "newPendingGitAsync",
+                title: "## newPendingGitAsync（手動レビュー後にスタブ追加が必要）",
+                items: audit.newPendingGitAsync
+              },
+              {
+                name: "newUnknown",
+                title: "## newUnknown",
+                items: audit.newUnknown
+              }
+            ];
+
+            let truncated = false;
+
+            for (let sectionIdx = 0; sectionIdx < sections.length && !truncated; sectionIdx++) {
+              const section = sections[sectionIdx];
+              if (section.items.length === 0) continue;
+
+              // Check if section title fits
+              const testWithTitle = [...lines, section.title, ""].join("\n");
+              if (testWithTitle.length >= SAFE_LIMIT) {
+                // Remaining sections cannot fit, add consolidated notice
+                const remainingCount = sections.slice(sectionIdx).reduce((sum, s) => sum + s.items.length, 0);
+                lines.push("");
+                lines.push(`... および他 ${remainingCount} 件は本文上限により表示を省略しました。`);
+                lines.push(`[Workflow run のログで全件確認](${serverUrl}/${repository}/actions/runs/${runId})`);
+                truncated = true;
+                break;
+              }
+
+              lines.push(section.title);
+              let sectionItemCount = 0;
+
+              for (let itemIdx = 0; itemIdx < section.items.length; itemIdx++) {
+                const item = section.items[itemIdx];
+                const itemLine = `- ${item}`;
+                const testWithItem = [...lines, itemLine].join("\n");
+
+                // Reserve space for truncation notice (estimate)
+                const truncNoticeEstimate = 250;
+                if (testWithItem.length + truncNoticeEstimate >= SAFE_LIMIT) {
+                  // Cannot fit this item and truncation notice, stop here
+                  const remainingInSection = section.items.length - sectionItemCount;
+                  const totalRemaining = remainingInSection + sections.slice(sectionIdx + 1).reduce((sum, s) => sum + s.items.length, 0);
+
+                  lines.push("");
+                  lines.push(`... および他 ${totalRemaining} 件は本文上限により表示を省略しました。`);
+                  lines.push(`[Workflow run のログで全件確認](${serverUrl}/${repository}/actions/runs/${runId})`);
+                  truncated = true;
+                  break;
+                }
+
+                lines.push(itemLine);
+                sectionItemCount++;
+              }
+
+              if (!truncated && sectionIdx < sections.length - 1) {
+                lines.push("");
+              }
             }
-            if (audit.newPendingGitAsync.length) {
-              lines.push("## newPendingGitAsync（手動レビュー後にスタブ追加が必要）");
-              lines.push(...audit.newPendingGitAsync.map((v) => `- ${v}`));
-              lines.push("");
-            }
-            if (audit.newUnknown.length) {
-              lines.push("## newUnknown");
-              lines.push(...audit.newUnknown.map((v) => `- ${v}`));
-              lines.push("");
-            }
+
             process.stdout.write(lines.join("\n").trimEnd() + "\n");
           ' | gh issue create --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
       - name: Commit and push changes
