@@ -21,7 +21,7 @@ jobs:
         id: check_version
         run: |
           LATEST=$(npm view @github/copilot version)
-          CURRENT=$(node -e "const m=require('./config/copilot-termux-release-manifest.json'); console.log(m.copilot_version || 'none')")
+          CURRENT=$(node -e "const m=require('./packages/copilot-termux/config/copilot-termux-release-manifest.json'); console.log(m.copilot_version || 'none')")
           echo "Latest: $LATEST"
           echo "Current: $CURRENT"
           if [ "$LATEST" != "$CURRENT" ]; then
@@ -37,7 +37,7 @@ jobs:
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
 
           # Update manifest
-          MANIFEST="config/copilot-termux-release-manifest.json"
+          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
           node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
@@ -139,7 +139,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add config/copilot-termux-release-manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
+          git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
 
@@ -153,8 +153,8 @@ jobs:
           gh workflow run npm-package.yml \
             --repo bash0816/Github-Copilot-Termux \
             --field publish=false \
-            --field npm_tag=candidate
+            --field retag_latest=false
 
-          echo "Dispatched npm-package.yml verify (publish=false, npm_tag=candidate) for version ${NEW_VERSION}"
+          echo "Dispatched npm-package.yml verify (publish=false, retag_latest=false) for version ${NEW_VERSION}"
         env:
           GH_TOKEN: ${{ github.token }}

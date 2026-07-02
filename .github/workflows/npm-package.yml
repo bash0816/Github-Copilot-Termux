@@ -7,9 +7,14 @@ on:
         description: 'Publish to npm'
         type: boolean
         default: false
-      npm_tag:
-        description: 'npm tag (candidate or latest)'
-        default: 'candidate'
+      retag_latest:
+        description: 'Update npm latest dist-tag (promote candidate to latest)'
+        type: boolean
+        default: false
+      previous_audited_version:
+        description: 'Previous audited version to restore to candidate during retag'
+        type: string
+        default: ''
 
 jobs:
   verify:
@@ -53,7 +58,7 @@ jobs:
 
   publish:
     needs: verify
-    if: ${{ fromJSON(inputs.publish) }}
+    if: ${{ fromJSON(inputs.publish) || fromJSON(inputs.retag_latest) }}
     runs-on: ubuntu-24.04-arm
     environment: npm-publish
     permissions:
@@ -67,40 +72,78 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Validate npm_tag
+      - name: Validate dispatch mode
         run: |
-          case "${{ inputs.npm_tag }}" in
-            candidate|latest) ;;
-            *) echo "ERROR: npm_tag must be 'candidate' or 'latest', got: ${{ inputs.npm_tag }}"; exit 1 ;;
-          esac
-
-      - name: Publish to npm
-        run: |
-          cd packages/copilot-termux
-          npm publish --tag "${{ inputs.npm_tag }}" --access public
+          set -euo pipefail
+          node -e "
+            const publish = '${{ inputs.publish }}' === 'true';
+            const retagLatest = '${{ inputs.retag_latest }}' === 'true';
+            if (publish && retagLatest) {
+              throw new Error('publish and retag_latest cannot both be true');
+            }
+            if (retagLatest && !process.env.PREVIOUS_AUDITED_VERSION) {
+              throw new Error('previous_audited_version is required when retag_latest is true');
+            }
+          "
+          echo "Validation passed"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
 
-      - name: Update manifest
+      - name: Publish package
+        if: ${{ fromJSON(inputs.publish) }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
-          MANIFEST="config/copilot-termux-release-manifest.json"
+          CANDIDATE=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').latest_candidate_version")
+          if [ "$VERSION" != "$CANDIDATE" ]; then
+            echo "ERROR: package version $VERSION does not match manifest candidate $CANDIDATE"
+            exit 1
+          fi
+          cd packages/copilot-termux
+          npm publish --tag candidate --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update manifest (publish)
+        if: ${{ fromJSON(inputs.publish) }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
+          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
           node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-            m.last_updated = new Date().toISOString().slice(0,10);
-            if ('${{ inputs.npm_tag }}' === 'candidate') {
-              m.latest_candidate_version = '$VERSION';
-              m.candidate_state = 'published';
-            } else {
-              m.latest_audited_version = '$VERSION';
-              m.candidate_state = 'promoted';
-            }
+            m.latest_candidate_version = '$VERSION';
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$MANIFEST"
-          git diff --staged --quiet || git commit -m "chore: update manifest after publish"
+          git diff --staged --quiet || git commit -m "chore: update manifest after candidate publish"
+          git push
+
+      - name: Retag latest
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        run: node scripts/retag-latest-dist-tags.js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          COPILOT_TERMUX_EXPECTED_PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
+
+      - name: Update manifest (retag)
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        run: |
+          set -euo pipefail
+          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
+          CANDIDATE=$(node -p "require('./$MANIFEST').latest_candidate_version")
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
+            m.previous_stable_version = '${{ inputs.previous_audited_version }}';
+            m.latest_audited_version = '$CANDIDATE';
+            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+          "
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$MANIFEST"
+          git diff --staged --quiet || git commit -m "chore: update manifest after retag to latest"
           git push
