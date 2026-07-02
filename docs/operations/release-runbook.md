@@ -259,14 +259,19 @@ gh workflow run npm-package.yml \
 
 ```bash
 npm dist-tags ls @bash0816/copilot-termux
-# 期待値:
-# candidate: 1.0.63
-# latest: 1.0.63
+# 期待値（例: previous_audited_version=1.0.63, candidate 版=1.0.65-1 の場合）:
+# latest: 1.0.65-1     ← retag 対象の candidate 版に昇格
+# candidate: 1.0.63    ← 旧 latest（previous_audited_version）に退避
 ```
 
 **manifest 自動更新**:
 
-- `npm-package.yml` の publish job が自動で `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `latest_audited_version` を更新してコミット・push する
+- `npm-package.yml` の retag job が自動で `packages/copilot-termux/config/copilot-termux-release-manifest.json` を更新してコミット・push する
+  - `latest_audited_version`: 昇格した版（旧 `latest_candidate_version`）
+  - `latest_candidate_version`: 退避後の registry `candidate` dist-tag（＝旧 `latest`）
+  - `previous_stable_version`: `previous_audited_version` 入力値
+  - `candidate_state`: `"promoted"`
+  - `last_updated`: 実行日
 
 **確認**:
 
