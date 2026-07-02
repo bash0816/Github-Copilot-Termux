@@ -114,6 +114,8 @@ jobs:
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
             m.latest_candidate_version = '$VERSION';
+            m.candidate_state = 'published';
+            m.last_updated = new Date().toISOString().slice(0, 10);
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
@@ -134,12 +136,22 @@ jobs:
         run: |
           set -euo pipefail
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
+          PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
           CANDIDATE=$(node -p "require('./$MANIFEST').latest_candidate_version")
+          # retag-latest-dist-tags.js が candidate タグを旧 latest に退避した後の値を registry から取得する
+          # (旧 latest が存在しない/退避されなかった場合は空のまま維持し manifest を壊さない)
+          NEW_CANDIDATE=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
           node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
             m.previous_stable_version = '${{ inputs.previous_audited_version }}';
             m.latest_audited_version = '$CANDIDATE';
+            const newCandidate = '$NEW_CANDIDATE';
+            if (newCandidate && newCandidate !== 'undefined') {
+              m.latest_candidate_version = newCandidate;
+            }
+            m.candidate_state = 'promoted';
+            m.last_updated = new Date().toISOString().slice(0, 10);
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
