@@ -4,27 +4,15 @@ GitHub Copilot CLI for Termux (Android aarch64).
 
 Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
-## ⚠️ Notice for 1.0.65 users / 1.0.65 をインストールした方へ
-
-**1.0.65 has known issues and @latest has been reverted to 1.0.63.**  
-1.0.65 に既知の問題が見つかったため、**@latest を 1.0.63 に戻しました。**
-
-If you installed 1.0.65, please downgrade:  
-1.0.65 をインストール済みの場合は以下で 1.0.63 に戻してください：
-
-```sh
-npm install -g @bash0816/copilot-termux@1.0.63 --force
-copilot-termux setup
-```
-
 ## Status / 状態
 
-- **@latest**: `1.0.63`（recommended / 推奨）
-- `1.0.65`: ⚠️ known issues / 既知の問題あり → not recommended / 使用非推奨
+- **@latest**: `1.0.65-1`（recommended / 推奨。1.0.65 の既知問題を修正済み）
 - package: `@bash0816/copilot-termux`
-- `copilot -p`: **available** ✅（1.0.63）
-- TUI (`copilot`): **available** ✅（1.0.63）
-- MCP: **available** ✅（1.0.63）
+- `copilot -p`: **available** ✅（1.0.65-1）
+- TUI (`copilot`): **available** ✅（1.0.65-1）
+- MCP: **available** ✅（1.0.65-1）
+
+既知の問題は [Known Issues](#known-issues--既知の問題) 参照。
 
 ## Install / インストール
 
@@ -86,8 +74,9 @@ copilot-termux setup
 
 ## Known Issues / 既知の問題
 
-- **1.0.65**: upstream version mismatch (downloads 1.0.64 binary) + `-p` mode bug → reverted to 1.0.63
-- **1.0.65**: upstream 不整合（1.0.64 バイナリを取得）+ `-p` モード不具合 → 1.0.63 に戻し済み
+- **`/update` changelog**: `/update` 実行時に表示される changelog（更新内容の説明文）が upstream 公式版のまま。実際のインストールコマンドは fork（`@bash0816/copilot-termux`）を正しく指しているため実害はない
+- **`/update` changelog**: The changelog text shown when running `/update` still reflects the upstream official release notes. The actual install command it prints already points to this fork, so no incorrect package is installed
+- 詳細・過去の修正履歴は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
 
 ## Do Not Use / 非推奨
 
