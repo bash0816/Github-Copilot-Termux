@@ -1,3 +1,27 @@
+## 1.0.68-1 — 2026-07-03 🔧 準備中（npm publish前）/ In preparation (not yet published)
+
+upstream `@github/copilot@1.0.68` 追従（wrapper バージョンは `1.0.68-1`）。
+
+**修正内容**
+
+- **`/update` 実行時のchangelog表示をフォーク独自の実内容に変更**（UPDATE-004・UPDATE-005）: `/update`実行時に upstream 公式版の changelog が表示されていた問題を修正。フォーク自身の npm `latest`/`candidate` タグと比較し、更新の有無に関わらず該当バージョンの GitHub Release ノートを表示するように変更
+- **Watch自動化の復旧**: `napi-audit.js` の ENOBUFS エラー（ネイティブバイナリの文字列抽出に`strings`サブプロセスを使っていたため発生）を修正し、upstream 追従を検知する `Copilot version watch` ワークフローを復旧
+- **`config/manifest.json` が実体（upstream バージョン）に追従しない問題を修正**（MANIFEST-002）: Watch自動化が package.json のバージョンのみ更新し、実際にダウンロードされる upstream バイナリのバージョン情報（manifest.json）を更新していなかった問題
+
+**既知の問題**
+
+- なし（前バージョンの UPDATE-004 の既知問題は本バージョンで解消）
+
+### Install
+
+```sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+```
+
+---
+
 ## 1.0.65-1 — 2026-07-03 🚀 Latest / 最新版
 
 upstream `@github/copilot@1.0.65` 追従（wrapper バージョンは `1.0.65-1`）。1.0.65 の既知問題を修正。

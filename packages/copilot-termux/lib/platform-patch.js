@@ -1315,6 +1315,103 @@ Object.defineProperty(globalThis, 'fetch', {
 // スキップし、パッチなしでフォールバックする。
 const { fileURLToPath } = require('url');
 
+// === UPDATE-005: Fork-specific changelog fetching (GitHub Releases API) ===
+// Object.freezeで共有参照の意図しないmutationを防ぐ（Opus STEP8レビュー指摘）。
+const FALLBACK_ENTRY = Object.freeze({ kind: 'add-timeline-entry', entry: Object.freeze({ type: 'info',
+  text: 'No new updates. @bash0816/copilot-termux (Termux fork) is already up to date.' }) });
+
+function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('overall timeout')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Helper: remove fork-specific revision suffix (e.g., "-1") for display purposes only.
+// Actual version comparison logic in check-updates.js must use the full version string.
+function toDisplayVersion(v) {
+  return typeof v === 'string' ? v.replace(/-\d+$/, '') : v;
+}
+
+// リリースノート本文を表示用に整形・truncateする。
+// 上限を超えたら "..." と GitHub Release へのリンクを付記する。
+const RELEASE_NOTES_MAX_LINES = 25;
+const RELEASE_NOTES_MAX_CHARS = 2500;
+
+function truncateReleaseNotes(body, releaseUrl) {
+  if (typeof body !== 'string' || body.length === 0) return '';
+  const lines = body.split(/\r\n|\r|\n/);
+  let truncated = false;
+  let out = lines;
+  if (out.length > RELEASE_NOTES_MAX_LINES) {
+    out = out.slice(0, RELEASE_NOTES_MAX_LINES);
+    truncated = true;
+  }
+  let text = out.join('\n');
+  if (text.length > RELEASE_NOTES_MAX_CHARS) {
+    text = text.slice(0, RELEASE_NOTES_MAX_CHARS);
+    truncated = true;
+  }
+  if (truncated) {
+    text += '\n...' + (releaseUrl ? `\n${releaseUrl}` : '');
+  }
+  return text;
+}
+
+async function buildForkUpdateMessage() {
+  const { resolveTarget, currentVersion, fetchReleaseNotes } = require('./check-updates.js');
+  const targetVer = await resolveTarget();
+  // UPDATE-005再設計（Blocker対応）: 更新の有無に関わらず、表示対象バージョン
+  // （更新ありなら target、なければ current）のリリースノートを表示する。
+  const noteVer = targetVer || currentVersion;
+
+  let notesText = '';
+  try {
+    const notes = await fetchReleaseNotes(noteVer);
+    // GitHub APIが返すhtml_urlを権威的なリンクとして優先する（Opus STEP8レビュー指摘）。
+    // 取得できない場合のみ手組みURLにフォールバック（タグ名は表示用のtoDisplayVersionではなく
+    // 実際のGitHub Releaseタグに一致する生のバージョン文字列を使う必要がある）。
+    const releaseUrl = (notes && typeof notes.htmlUrl === 'string' && notes.htmlUrl)
+      || `https://github.com/bash0816/Github-Copilot-Termux/releases/tag/v${noteVer}`;
+    notesText = truncateReleaseNotes(notes && notes.body, releaseUrl);
+  } catch (_) {
+    // リリースノート未作成(404)・ネットワーク失敗・サイズ超過等は致命的ではない。
+    // 詳細なしで案内のみ表示する（下の分岐で処理）。
+  }
+
+  if (targetVer) {
+    const header = `@bash0816/copilot-termux v${toDisplayVersion(targetVer)} available (current: v${toDisplayVersion(currentVersion)})`;
+    const install = 'Run: npm install -g @bash0816/copilot-termux';
+    const body = notesText ? `${header}\n\n${notesText}\n\n${install}` : `${header}\n\n${install}`;
+    return { kind: 'add-timeline-entry', entry: { type: 'info', text: body } };
+  }
+
+  // 更新なし: current version のリリースノートが取得できればそれを表示、
+  // 取得できなければ（例: そのバージョンのGitHub Release未作成）既存の固定文言にフォールバック。
+  if (notesText) {
+    const header = `You're on the latest version: v${toDisplayVersion(currentVersion)}`;
+    return { kind: 'add-timeline-entry', entry: { type: 'info', text: `${header}\n\n${notesText}` } };
+  }
+  return FALLBACK_ENTRY;
+}
+
+async function getForkUpdateMessage() {
+  try {
+    // resolveTarget最大10秒(latest+candidate) + release notes取得5秒を見込み、全体上限を8秒で設ける
+    // （candidateタグ確認中に打ち切られうる設計。UX上は妥当なトレードオフ）
+    return await withTimeout(buildForkUpdateMessage(), 8000);
+  } catch (e) {
+    console.warn('[copilot-termux] UPDATE-005: fork update check failed, falling back:', e && e.message);
+    return FALLBACK_ENTRY;
+  }
+}
+
+if (typeof globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ !== 'function') {
+  globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ = getForkUpdateMessage;
+}
+// === end UPDATE-005 ===
+
 function isTargetCopilotAppJsUrl(url) {
   if (typeof url !== 'string' || !url.startsWith('file://')) return false;
   let filename;
@@ -1355,20 +1452,22 @@ function patchAppJsSource(source) {
       (notifyMatches ? 'found ' + notifyMatches.length + ' times' : 'not found') + ', skipping patch');
   }
 
-  // UPDATE-004: `/update` 実行時、upstream tagが新しくない場合に /changelog コマンドへ
-  // フォールバックし upstream公式のchangelog.jsonを表示してしまう問題を修正。
-  // changelog本体の取得はせず、フォークとして適切な短いメッセージに差し替える。
+  // UPDATE-004/005: `/update` 実行時、upstream tagが新しくない場合に fork-specific changelog を取得して表示する。
+  // UPDATE-005: changelog本文は GitHub Releases API（該当バージョンのタグ）から取得
+  // （更新の有無に関わらず表示対象バージョンのリリースノートを表示、ローカルバンドル非依存）。
   // 戻り値の型（{kind:"add-timeline-entry",entry:{type:"info",text:...}}）は
   // k7.execute()の実際の戻り値契約を調査済みのため安全に代替できる。
+  // 実装: globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ が async 関数を指し、
+  // enclosing function（execute: async）の return で自動的に await される（codex指摘反映）。
   const CHANGELOG_FALLBACK_PATTERN = /if\(\!([a-zA-Z0-9_$]+\.default\.gt\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\))\)return [a-zA-Z0-9_$]+\.execute\([a-zA-Z0-9_$]+,\[[a-zA-Z0-9_$]+\]\)/g;
   const changelogMatches = patched.match(CHANGELOG_FALLBACK_PATTERN);
   if (changelogMatches && changelogMatches.length === 1) {
     patched = patched.replace(
       CHANGELOG_FALLBACK_PATTERN,
-      'if(!$1)return {kind:"add-timeline-entry",entry:{type:"info",text:"No new updates. @bash0816/copilot-termux (Termux fork) is already up to date."}}'
+      'if(!$1)return (typeof globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__==="function"?globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__():{kind:"add-timeline-entry",entry:{type:"info",text:"No new updates. @bash0816/copilot-termux (Termux fork) is already up to date."}})'
     );
   } else {
-    console.warn('[copilot-termux] UPDATE-004: changelog fallback pattern ' +
+    console.warn('[copilot-termux] UPDATE-004/005: changelog fallback pattern ' +
       (changelogMatches ? 'found ' + changelogMatches.length + ' times' : 'not found') + ', skipping patch');
   }
 

@@ -806,6 +806,8 @@ npm error notsup Unsupported platform for @bash0816/copilot-termux@1.0.65-1: wan
 | MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | ✅ 修正済み（commit `1097c77`、2026-06-29。ドキュメント更新漏れを2026-07-03是正） |
 | MANIFEST-002 | Watch自動化がconfig/manifest.jsonを更新せず、実体は追従しない | High | なし | ✅ 手動修正済み（2026-07-03、下記参照） |
 | CI-001 | release-finalize.ymlのrelease_notesがコマンドインジェクション脆弱 | Medium | なし | 🔜 未修正（暫定: `gh release create --notes-file`で回避済み） |
+| UPDATE-005 | `/update`のchangelogがフォーク独自バージョンの実内容を反映しない（UPDATE-004固定文言の限界） | Low | v1.0.68のGitHub Release作成 | ✅ GitHub Releases API方式で実装（2周目設計）・Sonnet自己検証・Opus STEP8 Go判定済み（2026-07-03）。残: v1.0.68 Release作成・TUI実機目視確認・npm publish。詳細: `docs/update-changelog-plan.md` |
+| TAB-001 | TUIでIssues/Pull requestsタブがグレーアウトする | - | なし | ✅ 調査完了・フォーク固有バグではない（upstream仕様）。下記参照 |
 
 ## MANIFEST-002: Watch自動化が`config/manifest.json`を更新しない（実体が追従しない）
 
@@ -869,6 +871,31 @@ copilot-termux にもないか確認した。**いずれも該当なし。**
   残ってしまい、canonical 名へ移行できない）
   → copilot-termux にはリネーム・typo の歴史がなく、`pkg.name` がそのまま
   正式名 `@bash0816/copilot-termux` のため該当しない。
+
+## TAB-001: TUIでIssues/Pull requestsタブがグレーアウトする（調査完了・修正不要）
+
+**重要度**: -（バグではない）
+**発見日**: 2026-07-03（ユーザーが1.0.68 TUI実機テスト中に指摘）
+**状態**: ✅ 調査完了。フォーク固有のバグではなく upstream の意図した仕様と判明。
+
+### 症状
+
+TUI のタブで「標準（Session）」と「Gists」しか選択できず、「Issues」「Pull requests」タブが
+グレーアウトして選択できない。
+
+### 原因（実 app.js 解析で特定済み、詳細は `docs/update-changelog-plan.md` 付録）
+
+Issues / Pull requests タブは `showGitHubRepositoryTabs` が false の場合のみ `disabled:true` になる。
+呼び出し元は一貫して `showGitHubRepositoryTabs: Er.isGitHubRepository` を渡しており、
+`isGitHubRepository` は「カレントディレクトリが GitHub を remote に持つ git リポジトリの中にあるか」
+で決まる（git root検出 → remote URL から GitHub の owner/repo をパースできれば true）。
+Gists は disabled 対象の Set に含まれていないため常に有効。
+
+### 対応方針
+
+修正不要。`copilot` を GitHub remote 付きの git リポジトリ内（例: `Github-Copilot-Termux` の
+clone 内）で起動すれば Issues / Pull requests タブが有効になるはず。次回リリースの
+ブロッカーにはしない。
 
 ## 残作業
 
