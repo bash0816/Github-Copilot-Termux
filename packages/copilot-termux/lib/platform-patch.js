@@ -1355,6 +1355,23 @@ function patchAppJsSource(source) {
       (notifyMatches ? 'found ' + notifyMatches.length + ' times' : 'not found') + ', skipping patch');
   }
 
+  // UPDATE-004: `/update` 実行時、upstream tagが新しくない場合に /changelog コマンドへ
+  // フォールバックし upstream公式のchangelog.jsonを表示してしまう問題を修正。
+  // changelog本体の取得はせず、フォークとして適切な短いメッセージに差し替える。
+  // 戻り値の型（{kind:"add-timeline-entry",entry:{type:"info",text:...}}）は
+  // k7.execute()の実際の戻り値契約を調査済みのため安全に代替できる。
+  const CHANGELOG_FALLBACK_PATTERN = /if\(\!([a-zA-Z0-9_$]+\.default\.gt\([a-zA-Z0-9_$]+,[a-zA-Z0-9_$]+\))\)return [a-zA-Z0-9_$]+\.execute\([a-zA-Z0-9_$]+,\[[a-zA-Z0-9_$]+\]\)/g;
+  const changelogMatches = patched.match(CHANGELOG_FALLBACK_PATTERN);
+  if (changelogMatches && changelogMatches.length === 1) {
+    patched = patched.replace(
+      CHANGELOG_FALLBACK_PATTERN,
+      'if(!$1)return {kind:"add-timeline-entry",entry:{type:"info",text:"No new updates. @bash0816/copilot-termux (Termux fork) is already up to date."}}'
+    );
+  } else {
+    console.warn('[copilot-termux] UPDATE-004: changelog fallback pattern ' +
+      (changelogMatches ? 'found ' + changelogMatches.length + ' times' : 'not found') + ', skipping patch');
+  }
+
   return patched;
 }
 
