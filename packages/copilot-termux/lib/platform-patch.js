@@ -1305,24 +1305,78 @@ Object.defineProperty(globalThis, 'fetch', {
   set(_) { /* B7 代入を無視 */ },
 });
 
-// UPDATE-001: /update コマンドが @github/copilot の npm install 文字列を出力する問題を修正。
-// app.js 内の WEr() がハードコードする `npm i -g @github/copilot@${version}` を
-// @bash0816/copilot-termux に差し替える。Module._extensions で index.js ロード時にのみ適用。
-const _origJsExtension = Module._extensions['.js'];
-Module._extensions['.js'] = function(mod, filename) {
-  if (typeof filename === 'string' && /[/\\]\.copilot-termux[/\\]current[/\\]index\.js$/.test(filename)) {
-    const origCompile = mod._compile.bind(mod);
-    mod._compile = function(content, _filename) {
-      const PATTERN = /`npm i -g @github\/copilot@\$\{[^}]+\}`/g;
-      const matches = content.match(PATTERN);
-      if (matches && matches.length === 1) {
-        content = content.replace(PATTERN, '`npm install -g @bash0816/copilot-termux`');
-      } else {
-        console.warn('[copilot-termux] UPDATE-001: update string pattern ' +
-          (matches ? 'found ' + matches.length + ' times' : 'not found') + ', skipping patch');
-      }
-      return origCompile(content, _filename);
-    };
+// UPDATE-001 / UPDATE-003: 公式 GitHub Copilot CLI (@github/copilot) の app.js に対するパッチ。
+// (1) `/update` が表示するインストールコマンド文字列を fork のパッケージ名に差し替える (UPDATE-001)
+// (2) upstream 公式リポジトリ (github/copilot-cli) のリリースチェックに基づく起動時通知バナーを無効化する (UPDATE-003)
+// app.js は ~/.copilot-termux/<version>/package.json の "type":"module" により ESM としてロードされる。
+// CJS専用の Module._extensions['.js'] はESMコンパイルに一切関与しないため機能しない
+// （2026-07-02 実機再現で確認済み）。正しい介入点は node:module の registerHooks()
+// (Node v22.15.0/v23.5.0+ で追加された同期 ESM Loader Hook)。未対応のNodeではフィーチャー検出で
+// スキップし、パッチなしでフォールバックする。
+const { fileURLToPath } = require('url');
+
+function isTargetCopilotAppJsUrl(url) {
+  if (typeof url !== 'string' || !url.startsWith('file://')) return false;
+  let filename;
+  try {
+    filename = fileURLToPath(url);
+  } catch (_) {
+    return false;
   }
-  return _origJsExtension(mod, filename);
-};
+  // app.js が `.copilot-termux/<version-or-current>/app.js` に直接あることを要求する
+  // （codex STEP8 指摘: basename + セグメント包含だけだと
+  // `.copilot-termux/<version>/node_modules/**/app.js` のような無関係な深い階層にも
+  // 誤反応しうるため、`.copilot-termux` の直後2セグメント目である場合のみ許可する）
+  if (path.basename(filename) !== 'app.js') return false;
+  const segments = filename.split(/[\\/]/);
+  const idx = segments.indexOf('.copilot-termux');
+  if (idx === -1) return false;
+  return idx + 2 === segments.length - 1;
+}
+
+function patchAppJsSource(source) {
+  let patched = source;
+
+  const INSTALL_CMD_PATTERN = /`npm i -g @github\/copilot@\$\{[^}]+\}`/g;
+  const installMatches = patched.match(INSTALL_CMD_PATTERN);
+  if (installMatches && installMatches.length === 1) {
+    patched = patched.replace(INSTALL_CMD_PATTERN, '`npm install -g @bash0816/copilot-termux`');
+  } else {
+    console.warn('[copilot-termux] UPDATE-001: update string pattern ' +
+      (installMatches ? 'found ' + installMatches.length + ' times' : 'not found') + ', skipping patch');
+  }
+
+  const NOTIFY_PATTERN = /[a-zA-Z0-9_$]+\.gt\([a-zA-Z0-9_$]+\.tag_name,[a-zA-Z0-9_$]+\(\)\)&&\([a-zA-Z0-9_$]+\.info\(`Update available: \$\{[a-zA-Z0-9_$]+\.tag_name\}`\),[a-zA-Z0-9_$]+\.sendUpdateNotification\(`\$\{[a-zA-Z0-9_$]+\.tag_name\} available \\xB7 run \/update`\)\)/g;
+  const notifyMatches = patched.match(NOTIFY_PATTERN);
+  if (notifyMatches && notifyMatches.length === 1) {
+    patched = patched.replace(NOTIFY_PATTERN, 'false');
+  } else {
+    console.warn('[copilot-termux] UPDATE-003: upstream release notification pattern ' +
+      (notifyMatches ? 'found ' + notifyMatches.length + ' times' : 'not found') + ', skipping patch');
+  }
+
+  return patched;
+}
+
+if (!globalThis.__COPILOT_TERMUX_ESM_PATCH_REGISTERED__) {
+  globalThis.__COPILOT_TERMUX_ESM_PATCH_REGISTERED__ = true;
+  const { registerHooks } = require('module');
+  if (typeof registerHooks === 'function') {
+    registerHooks({
+      load(url, context, nextLoad) {
+        const result = nextLoad(url, context);
+        if (!isTargetCopilotAppJsUrl(url)) return result;
+        if (result.source == null) return result;
+        const wasNonString = typeof result.source !== 'string';
+        const src = wasNonString ? Buffer.from(result.source).toString('utf8') : result.source;
+        const patched = patchAppJsSource(src);
+        return Object.assign({}, result, { source: patched });
+      }
+    });
+  } else {
+    console.warn('[copilot-termux] UPDATE-001/003: node:module registerHooks() not available on this Node version (' + process.version + '), skipping app.js patch');
+  }
+}
+
+module.exports.patchAppJsSource = patchAppJsSource;
+module.exports.isTargetCopilotAppJsUrl = isTargetCopilotAppJsUrl;
