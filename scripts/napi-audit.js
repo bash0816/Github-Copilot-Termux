@@ -1,12 +1,7 @@
 'use strict';
 
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -67,13 +62,35 @@ function classifyCandidates(candidates, config) {
 }
 
 function extractCandidates(runtimePath) {
-  const cmd = `strings -n 8 ${shellQuote(runtimePath)}`;
-  const output = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] });
+  // Implement strings -n 8 behavior: extract runs of printable ASCII chars (0x20-0x7E)
+  // that are at least 8 bytes long, then apply identifier regex filter
+  const buffer = fs.readFileSync(runtimePath);
   const seen = new Set();
-  for (const line of output.split(/\r?\n/)) {
-    const candidate = line.trim();
-    if (/^[a-zA-Z_$][a-zA-Z0-9_$]{6,}$/.test(candidate)) seen.add(candidate);
+
+  let i = 0;
+  while (i < buffer.length) {
+    // Scan for start of run of printable ASCII (0x20-0x7E)
+    if (buffer[i] >= 0x20 && buffer[i] <= 0x7E) {
+      const runStart = i;
+      // Continue while bytes are printable ASCII
+      while (i < buffer.length && buffer[i] >= 0x20 && buffer[i] <= 0x7E) {
+        i++;
+      }
+      const runLength = i - runStart;
+      // Keep only runs >= 8 bytes
+      if (runLength >= 8) {
+        // Decode as latin1 (1 byte = 1 character, handles 0x00-0xFF)
+        const candidate = buffer.toString('latin1', runStart, i).trim();
+        // Apply identifier regex filter
+        if (/^[a-zA-Z_$][a-zA-Z0-9_$]{6,}$/.test(candidate)) {
+          seen.add(candidate);
+        }
+      }
+    } else {
+      i++;
+    }
   }
+
   return Array.from(seen).sort();
 }
 
@@ -181,4 +198,22 @@ function main() {
   process.stdout.write(JSON.stringify(output));
 }
 
-main();
+// Export functions for testing
+module.exports = {
+  extractCandidates,
+  classifyCandidates,
+  readJson,
+  writeJson,
+  uniqueSorted,
+  loadKnownSet,
+  loadPendingSet,
+  patchTokioPattern,
+  appendPendingGitAsyncStubs,
+  updateKnownExportsConfig,
+  maybeAutoPatch,
+};
+
+// Only run main if this file is executed directly
+if (require.main === module) {
+  main();
+}

@@ -158,3 +158,12 @@ jobs:
           echo "Dispatched npm-package.yml verify (publish=false, retag_latest=false) for version ${NEW_VERSION}"
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Report workflow failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh issue create \
+            --title "⚠️ Copilot version watch failed" \
+            --body "Workflow run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
