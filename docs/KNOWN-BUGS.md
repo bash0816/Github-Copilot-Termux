@@ -345,8 +345,9 @@ Update is not supported when running js directly.
 ### スモークテスト追加（2026-07-02）
 
 これまで `copilot update` 機能のスモークテストが一度も実施されていませんでした。
-今回、`docs/SMOKE-TEST.md` に UPDATE-002 対応テストケース **TC-U1〜U8** を追加しました。
-テスト対象と期待動作の詳細は [docs/SMOKE-TEST.md#copilot-update-機能のテストケース-update-002](./SMOKE-TEST.md#copilot-update-機能のテストケース-update-002) を参照してください。
+今回、`docs/SMOKE-TEST.md` に UPDATE-002 対応テストケース **TC-U1〜U8** を追加し、
+Termux 実機（bionic mode）で全ケース実行し **全て Pass** を確認しました（2026-07-02）。
+テスト対象・期待動作・実施結果の詳細は [docs/SMOKE-TEST.md#copilot-update-機能のテストケース-update-002](./SMOKE-TEST.md#copilot-update-機能のテストケース-update-002) を参照してください。
 
 ### 追加バグ修正（2026-07-02）
 

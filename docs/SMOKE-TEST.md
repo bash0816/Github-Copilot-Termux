@@ -272,6 +272,25 @@ node packages/copilot-termux/lib/check-updates.js update --dry-run
 
 ---
 
+### TC-U1〜U8 実施結果（2026-07-02）
+
+Termux 実機（bionic mode）で全8ケースを実行し、全て期待通りの結果を確認した。
+
+| ケース | 方法 | 結果 |
+|--------|------|------|
+| TC-U1 | `--dry-run`（scratch コピーで local を 1.0.62 に変更） | ✅ `npm install -g --prefix ... @bash0816/copilot-termux@1.0.63` を出力、実インストールなし |
+| TC-U2 | 実環境（local `1.0.65-1` > registry `1.0.63`） | ✅ `Already on latest version: 1.0.65-1`・exit 0・rollback案内なし |
+| TC-U3 | scratch コピー（local を registry latest と同一の `1.0.63` に変更） | ✅ `Already on latest version: 1.0.63`・exit 0 |
+| TC-U4 | `https.get` をモックしネットワーク失敗を再現 | ✅ `Failed to check for updates: ...` + 手動コマンド案内・exit 1 |
+| TC-U5 | scratch コピー（local `1.0.63` 安定版、モックで latest=1.0.64・candidate=1.0.66-1） | ✅ candidate ではなく latest(1.0.64) のみを対象に選定（誤って dry-run なしで実行したが対象バージョンが registry に存在せず ETARGET で安全に失敗、グローバルインストールへの影響なし確認済み） |
+| TC-U6 | scratch コピー（local `1.0.63-1` prerelease、モックで latest=1.0.64・candidate=1.0.66-1）＋`--dry-run` | ✅ candidate(1.0.66-1) を正しく選定 |
+| TC-U7 | `https.get` モックで latest 成功・candidate 404 ＋`--dry-run` | ✅ candidate 失敗を無視し latest(1.0.64) のみで継続 |
+| TC-U8 | TC-U1 と同一実行で兼ねる | ✅ dry-run で実インストールなし・正しいコマンド文字列のみ出力 |
+
+検証方法の詳細: `https.get` をモックする簡易テストハーネスを一時ディレクトリ（`$TMPDIR`）に作成して実行し、テスト後にディレクトリごと削除した。実リポジトリ・実インストール環境（`~/.copilot-termux/current`）への影響がないことを確認済み。
+
+---
+
 ## デバッグログの確認方法
 
 詳細ログを有効にして起動:
