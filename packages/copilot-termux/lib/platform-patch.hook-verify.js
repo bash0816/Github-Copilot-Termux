@@ -168,7 +168,7 @@ console.log('[FIXTURE] WEr() =', WEr());
   assert(!patchedSource.includes(CHANGELOG_FALLBACK_FIXTURE),
     'UPDATE-006b: upstream changelog fallback branch [a] is replaced (if(!X.gt(u,a))return Y.execute(t,[a]) no longer present)');
 
-  assert(patchedSource.includes('if(!ELt.default.gt(u,a))return nj.execute(t,[u])'),
+  assert(patchedSource.includes('if(!ELt.default.gt(u,a))return nj.execute(t,[u.replace(/^v/,"")])'),
     'UPDATE-006b: changelog fallback now uses [u] (fork-latest base version) instead of [a] (current version)');
 
   assert(!patchedSource.includes('__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__'),
