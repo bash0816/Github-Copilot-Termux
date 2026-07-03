@@ -1386,7 +1386,7 @@ function patchAppJsSource(source) {
   const noUpdateMatches = patched.match(NO_UPDATE_PATTERN);
   if (noUpdateMatches && noUpdateMatches.length === 1) {
     patched = patched.replace(NO_UPDATE_PATTERN,
-      'if(!ELt.default.gt(u,a))return nj.execute(t,[u])'
+      'if(!ELt.default.gt(u,a))return nj.execute(t,[u.replace(/^v/,"")])'
     );
   } else {
     console.warn('[copilot-termux] UPDATE-006b: no-update changelog pattern ' +
