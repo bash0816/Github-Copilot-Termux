@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
 
-          # Update manifest
+          # Update copilot-termux-release-manifest.json
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
           node -e "
             const fs = require('fs');
@@ -45,7 +45,7 @@ jobs:
             m.last_updated = new Date().toISOString().slice(0,10);
             m.candidate_state = 'none';
             m.canonical_package_status = 'not_published';
-            m.latest_candidate_version = null;
+            m.latest_candidate_version = '$NEW_VERSION';
             fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
           "
 
@@ -57,6 +57,22 @@ jobs:
             p.version = '$NEW_VERSION';
             fs.writeFileSync('$PKG', JSON.stringify(p, null, 2) + '\n');
           "
+
+          # Update config/manifest.json (MANIFEST-002: setup.js が実際に読むファイル)
+          SETUP_MANIFEST="packages/copilot-termux/config/manifest.json"
+          INTEGRITY=$(npm view "@github/copilot-linuxmusl-arm64@${NEW_VERSION}" dist.integrity 2>/dev/null || echo "")
+          if [ -z "$INTEGRITY" ]; then
+            echo "WARNING: Could not fetch integrity for @github/copilot-linuxmusl-arm64@${NEW_VERSION}, skipping manifest.json update"
+          else
+            node -e "
+              const fs = require('fs');
+              const m = JSON.parse(fs.readFileSync('$SETUP_MANIFEST', 'utf8'));
+              m.copilot.version = '$NEW_VERSION';
+              m.copilot.integrity = '$INTEGRITY';
+              fs.writeFileSync('$SETUP_MANIFEST', JSON.stringify(m, null, 2) + '\n');
+            "
+            echo "Updated config/manifest.json: version=$NEW_VERSION"
+          fi
 
           echo "Updated manifest and package.json to version: $NEW_VERSION"
       - name: Analyze NAPI exports for new version
@@ -202,7 +218,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
+          git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/config/manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
 

@@ -1,17 +1,16 @@
-## 1.0.68 — 2026-07-04 🔧 準備中（npm publish前）/ In preparation (not yet published)
+## 1.0.68 — 2026-07-04 🚀 Latest / 最新版
 
 upstream `@github/copilot@1.0.68` 追従。
 
 **修正内容**
 
-- **`/update` の latest 判定元をフォーク自身の npm dist-tag に変更**（UPDATE-006）: TUI `/update` が upstream 公式 GitHub latest を参照していたため、フォークがまだ追いついていないバージョンへの「更新あり」誤報を防止。`@bash0816/copilot-termux` の npm dist-tag `latest` を取得し suffix（`-N`）を除去して base バージョンと比較する。changelog 本文の取得は upstream 公式（`github/copilot-cli` GitHub Releases API）をそのまま使用
-- **`/update` 実行時の changelog 表示を upstream 本来の挙動に修正**（UPDATE-004・UPDATE-005撤去）: フォーク独自の GitHub Release ノート取得機能（UPDATE-005）を削除し、upstream 本来の `/changelog` コマンド実行を復活
+- **`/update` 実行時の changelog 表示を upstream 本来の挙動に修正**（UPDATE-004・UPDATE-005撤去）: フォーク独自の GitHub Release ノート取得機能を削除し、upstream 本来の `/changelog` コマンド実行を復活
 - **Watch自動化の復旧**: `napi-audit.js` の ENOBUFS エラーを修正し、`Copilot version watch` ワークフローを復旧
 - **`config/manifest.json` が実体（upstream バージョン）に追従しない問題を修正**（MANIFEST-002）
 
 **既知の問題**
 
-- なし（前バージョンの UPDATE-004/005 / UPDATE-006 の既知問題は本バージョンで解消）
+- **TUI `/update` の changelog 表示**: `/update` 実行時に表示される changelog が現在インストール済みのバージョンではなく、upstream の最新バージョンのものが表示される場合があります
 
 ### Install
 
@@ -23,7 +22,7 @@ copilot --version
 
 ---
 
-## 1.0.65-1 — 2026-07-03 🚀 Latest / 最新版
+## 1.0.65-1 — 2026-07-03 🔒 Previous stable / 旧安定版
 
 upstream `@github/copilot@1.0.65` 追従（wrapper バージョンは `1.0.65-1`）。1.0.65 の既知問題を修正。
 
