@@ -3,7 +3,7 @@
   "package_name": "@bash0816/copilot-termux",
   "copilot_version": "1.0.68",
   "latest_audited_version": "1.0.65-1",
-  "latest_candidate_version": null,
+  "latest_candidate_version": "1.0.68",
   "previous_stable_version": "1.0.63",
   "candidate_state": "none",
   "canonical_package_status": "not_published",
