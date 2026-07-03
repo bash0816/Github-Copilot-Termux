@@ -2,7 +2,7 @@
 
 > **記録日**: 2026-06-27（最終更新: 2026-07-03）  
 > **Opus レビュー**: 2026-06-27 実施済み  
-> **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006（`/update`のlatest判定元をフォーク自身のnpm dist-tagに差し替え）は `patchAppJsSource()` にて実装済み（2026-07-04）。TUI目視確認・npm publish待ち。詳細はUPDATE-006本文参照。
+> **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006 + UPDATE-006b 実装済み（2026-07-04）: DO()のlatest取得先をnpm dist-tagに差し替え＋「更新なし」時のchangelog引数[a]→[u]に変更。テスト26 PASS・グローバルインストール更新済み。TUI目視確認・npm publish待ち。
 
 ---
 
