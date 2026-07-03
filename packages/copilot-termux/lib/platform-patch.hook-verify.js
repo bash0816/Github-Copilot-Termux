@@ -159,14 +159,17 @@ console.log('[FIXTURE] WEr() =', WEr());
   assert(!patchedSource.includes('sendUpdateNotification('),
     'Patched content has upstream sendUpdateNotification(...) call removed (replaced with false)');
 
-  // 7b. 【UPDATE-004/005撤去の回帰確認】changelog fallback分岐は一切パッチされず、
-  //     upstream本来の形のまま残ること。フォーク独自のchangelog表示機構
-  //     （globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__）が混入しないこと。
-  console.log('\n[Test] UPDATE-004/005 removal regression check');
+  // 7b. 【UPDATE-006b確認 + UPDATE-004/005撤去の回帰確認】
+  //     - UPDATE-006b: changelog fallback分岐の引数が [a] → [u] に置換されること
+  //     - フォーク独自のchangelog表示機構（__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__）が
+  //       混入しないこと（UPDATE-004/005は完全撤去済み）
+  console.log('\n[Test] UPDATE-006b changelog fallback [a]→[u] replacement + UPDATE-004/005 removal regression check');
 
-  assert(patchedSource.includes(CHANGELOG_FALLBACK_FIXTURE),
-    'Patched content: upstream changelog fallback branch (if(!X.gt(u,a))return Y.execute(t,[a])) ' +
-    'remains completely unmodified (UPDATE-004/005 no longer patches this)');
+  assert(!patchedSource.includes(CHANGELOG_FALLBACK_FIXTURE),
+    'UPDATE-006b: upstream changelog fallback branch [a] is replaced (if(!X.gt(u,a))return Y.execute(t,[a]) no longer present)');
+
+  assert(patchedSource.includes('if(!ELt.default.gt(u,a))return nj.execute(t,[u])'),
+    'UPDATE-006b: changelog fallback now uses [u] (fork-latest base version) instead of [a] (current version)');
 
   assert(!patchedSource.includes('__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__'),
     'Patched content does not contain __COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ ' +
