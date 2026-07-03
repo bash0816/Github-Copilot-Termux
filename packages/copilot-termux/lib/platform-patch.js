@@ -1363,12 +1363,12 @@ function patchAppJsSource(source) {
   if (forkLatestMatches && forkLatestMatches.length === 1) {
     patched = patched.replace(FORK_LATEST_PATTERN,
       'return await(async()=>{try{' +
-      'const res=await fetch("https://registry.npmjs.org/%40bash0816%2Fcopilot-termux/latest");' +
+      'const res=await fetch("https://registry.npmjs.org/%40bash0816%2Fcopilot-termux/latest",{signal:AbortSignal.timeout(5000)});' +
       'if(!res.ok)throw new Error("npm registry returned "+res.status);' +
       'const data=await res.json();' +
       'if(!data||typeof data.version!=="string")throw new Error("npm registry response missing version");' +
       'const ver=data.version.replace(/-\\d+$/,"");' +
-      'if(!/^\\d+\\.\\d+\\.\\d+/.test(ver))throw new Error("invalid version: "+data.version);' +
+      'if(!/^\\d+\\.\\d+\\.\\d+$/.test(ver))throw new Error("invalid version: "+data.version);' +
       'return{tag_name:"v"+ver,assets:[]};' +
       '}catch(e){return{error:String(e)};}})()'
     );
