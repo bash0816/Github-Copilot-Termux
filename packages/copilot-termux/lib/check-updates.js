@@ -79,7 +79,7 @@ function writeCache(data) {
   fs.writeFileSync(cacheFile, JSON.stringify(data, null, 2) + '\n');
 }
 
-function fetchVersionManifest(tag) {
+function fetchVersion(tag) {
   return new Promise((resolve, reject) => {
     const url = `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(tag)}`;
     const req = https.get(url, { timeout: 5000 }, res => {
@@ -87,16 +87,12 @@ function fetchVersionManifest(tag) {
       let body = '';
       res.on('data', c => { body += c; });
       res.on('end', () => {
-        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+        try { resolve(JSON.parse(body).version); } catch (e) { reject(e); }
       });
     });
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.on('error', reject);
   });
-}
-
-function fetchVersion(tag) {
-  return fetchVersionManifest(tag).then(m => m.version);
 }
 
 async function resolveTarget() {
@@ -174,7 +170,7 @@ async function runNotify() {
   return 0;
 }
 
-module.exports = { runUpdate, runNotify, resolveTarget, currentVersion, fetchVersionManifest };
+module.exports = { runUpdate, runNotify };
 
 // CLI entry
 if (require.main === module) {

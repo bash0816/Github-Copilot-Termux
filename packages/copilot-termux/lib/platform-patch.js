@@ -1355,6 +1355,28 @@ function patchAppJsSource(source) {
       (notifyMatches ? 'found ' + notifyMatches.length + ' times' : 'not found') + ', skipping patch');
   }
 
+  // UPDATE-006: DO() 内の releases/latest 取得先をフォーク自身の npm dist-tag latest に差し替える。
+  // 変数名 o,n はDO()固有（a$e()は a,r を使うため誤爆しない）。
+  // changelog本文の取得（nj.execute / fetchReleaseByTag、owner:"github"）は一切変更しない。
+  const FORK_LATEST_PATTERN = /return\(await rF\(o=>gR\("GET \/repos\/\{owner\}\/\{repo\}\/releases\/latest",\{owner:"github",repo:"copilot-cli",headers:o\}\),n\)\)\.data/g;
+  const forkLatestMatches = patched.match(FORK_LATEST_PATTERN);
+  if (forkLatestMatches && forkLatestMatches.length === 1) {
+    patched = patched.replace(FORK_LATEST_PATTERN,
+      'return await(async()=>{try{' +
+      'const res=await fetch("https://registry.npmjs.org/%40bash0816%2Fcopilot-termux/latest");' +
+      'if(!res.ok)throw new Error("npm registry returned "+res.status);' +
+      'const data=await res.json();' +
+      'if(!data||typeof data.version!=="string")throw new Error("npm registry response missing version");' +
+      'const ver=data.version.replace(/-\\d+$/,"");' +
+      'if(!/^\\d+\\.\\d+\\.\\d+/.test(ver))throw new Error("invalid version: "+data.version);' +
+      'return{tag_name:"v"+ver,assets:[]};' +
+      '}catch(e){return{error:String(e)};}})()'
+    );
+  } else {
+    console.warn('[copilot-termux] UPDATE-006: fork latest pattern ' +
+      (forkLatestMatches ? 'found ' + forkLatestMatches.length + ' times' : 'not found') + ', skipping patch');
+  }
+
   return patched;
 }
 
