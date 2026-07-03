@@ -99,54 +99,6 @@ function fetchVersion(tag) {
   return fetchVersionManifest(tag).then(m => m.version);
 }
 
-const RELEASE_OWNER = 'bash0816';
-const RELEASE_REPO = 'Github-Copilot-Termux';
-const RELEASE_NOTES_MAX_BYTES = 65536; // 64KB上限。超過時はabortしてreject（SSRF対策ではなく素朴なDoS/メモリ対策）
-
-// GitHub Releases API から該当バージョンのリリースノートを取得する。
-// UPDATE-005: npm registryのカスタムフィールド方式は publish 済みバージョンに
-// 後付けできないため、GitHub Releases（owner/repoはハードコード、SSRF対策として
-// 外部入力やpackage.json.repositoryから動的に取らない）に切り替えた。
-function fetchReleaseNotes(version) {
-  return new Promise((resolve, reject) => {
-    const url = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases/tags/v${encodeURIComponent(version)}`;
-    const req = https.get(url, {
-      timeout: 5000,
-      headers: {
-        'User-Agent': packageName,
-        Accept: 'application/vnd.github+json',
-      },
-    }, res => {
-      if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}`)); return; }
-      let body = '';
-      let size = 0;
-      let aborted = false;
-      res.on('data', c => {
-        size += c.length;
-        if (size > RELEASE_NOTES_MAX_BYTES) {
-          aborted = true;
-          req.destroy(new Error('response too large'));
-          return;
-        }
-        body += c;
-      });
-      res.on('end', () => {
-        if (aborted) return;
-        try {
-          const json = JSON.parse(body);
-          resolve({
-            name: typeof json.name === 'string' ? json.name : null,
-            body: typeof json.body === 'string' ? json.body : '',
-            htmlUrl: typeof json.html_url === 'string' ? json.html_url : null,
-          });
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('timeout')));
-    req.on('error', reject);
-  });
-}
-
 async function resolveTarget() {
   const latestVer = await fetchVersion('latest');
 
@@ -222,7 +174,7 @@ async function runNotify() {
   return 0;
 }
 
-module.exports = { runUpdate, runNotify, resolveTarget, currentVersion, fetchVersionManifest, fetchReleaseNotes };
+module.exports = { runUpdate, runNotify, resolveTarget, currentVersion, fetchVersionManifest };
 
 // CLI entry
 if (require.main === module) {

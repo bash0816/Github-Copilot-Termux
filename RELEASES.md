@@ -4,7 +4,7 @@ upstream `@github/copilot@1.0.68` 追従（wrapper バージョンは `1.0.68-1`
 
 **修正内容**
 
-- **`/update` 実行時のchangelog表示をフォーク独自の実内容に変更**（UPDATE-004・UPDATE-005）: `/update`実行時に upstream 公式版の changelog が表示されていた問題を修正。フォーク自身の npm `latest`/`candidate` タグと比較し、更新の有無に関わらず該当バージョンの GitHub Release ノートを表示するように変更
+- **`/update` 実行時のchangelog表示を upstream 本来の挙動に修正**（UPDATE-004・UPDATE-005撤去）: フォーク独自の GitHub Release ノート取得機能（UPDATE-005）を削除し、upstream 本来の `/changelog` コマンド実行を復活。更新判定も upstream 公式コード（バンドルバージョン比較）をそのまま実行する形に修正
 - **Watch自動化の復旧**: `napi-audit.js` の ENOBUFS エラー（ネイティブバイナリの文字列抽出に`strings`サブプロセスを使っていたため発生）を修正し、upstream 追従を検知する `Copilot version watch` ワークフローを復旧
 - **`config/manifest.json` が実体（upstream バージョン）に追従しない問題を修正**（MANIFEST-002）: Watch自動化が package.json のバージョンのみ更新し、実際にダウンロードされる upstream バイナリのバージョン情報（manifest.json）を更新していなかった問題
 
@@ -33,11 +33,9 @@ upstream `@github/copilot@1.0.65` 追従（wrapper バージョンは `1.0.65-1`
 - **起動時通知バナーの誤表示修正**（UPDATE-003）: upstream 公式リポジトリの新バージョンを fork ユーザーに通知してしまう問題を修正（バナー自体を無効化）
 - **`copilot update` / `copilot-termux update` の自己更新対応**（UPDATE-002）: それまで npm パッケージ自体を更新できなかった問題を修正。ダウングレード防止・rollback誤案内の修正込み
 
-**既知の問題（Low・実害小・次回対応）**
+**既知の問題（解消済み）**
 
-- `/update` 実行時に表示される changelog（更新内容の説明文）が upstream 公式版のまま。
-  実際にインストールされる npm コマンドは fork を正しく指しているため、誤ったパッケージが
-  インストールされることはない（UPDATE-004、詳細は `docs/KNOWN-BUGS.md`）
+- `/update` 実行時の changelog 表示問題（UPDATE-004・UPDATE-005）→ 1.0.68-1 で撤去・修正済み
 
 ### Install
 
