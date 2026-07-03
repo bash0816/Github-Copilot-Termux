@@ -65,10 +65,17 @@ try {
   console.log('[Setup] Created package.json (type: module)');
 
   // 2. 疑似 app.js を作成（UPDATE-001 と UPDATE-003 の両パターン含む、ESM構文）
+  // UPDATE-004/005撤去の回帰確認用: upstream本来のchangelog fallback分岐
+  // （旧CHANGELOG_FALLBACK_PATTERNがマッチしていた形）も含める。
+  // このパターンは撤去後は一切書き換えられず、元のまま残ることを確認する。
+  const CHANGELOG_FALLBACK_FIXTURE = 'if(!ELt.default.gt(u,a))return nj.execute(t,[a])';
   const fakeAppJs = `// Minified ESM stub containing both patterns
 export const WEr = function () { return \`npm i -g @github/copilot@\${someVar}\`; };
 export const checkReleases = function (c) {
   x.gt(c.tag_name,y())&&(z.info(\`Update available: \${c.tag_name}\`),w.sendUpdateNotification(\`\${c.tag_name} available \\xB7 run /update\`))
+};
+export const runUpdateCommand = async (t, e) => {
+  ${CHANGELOG_FALLBACK_FIXTURE};
 };
 `;
   fs.writeFileSync(appJsPath, fakeAppJs, 'utf8');
@@ -146,6 +153,19 @@ console.log('[FIXTURE] WEr() =', WEr());
 
   assert(!patchedSource.includes('sendUpdateNotification('),
     'Patched content has upstream sendUpdateNotification(...) call removed (replaced with false)');
+
+  // 7b. 【UPDATE-004/005撤去の回帰確認】changelog fallback分岐は一切パッチされず、
+  //     upstream本来の形のまま残ること。フォーク独自のchangelog表示機構
+  //     （globalThis.__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__）が混入しないこと。
+  console.log('\n[Test] UPDATE-004/005 removal regression check');
+
+  assert(patchedSource.includes(CHANGELOG_FALLBACK_FIXTURE),
+    'Patched content: upstream changelog fallback branch (if(!X.gt(u,a))return Y.execute(t,[a])) ' +
+    'remains completely unmodified (UPDATE-004/005 no longer patches this)');
+
+  assert(!patchedSource.includes('__COPILOT_TERMUX_FORK_UPDATE_MESSAGE__'),
+    'Patched content does not contain __COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ ' +
+    '(fork-specific changelog mechanism fully removed)');
 
   // 8. パターン検出エッジケース（複数マッチ・非マッチ時は無変更）
   console.log('\n[Test] Pattern detection edge cases');

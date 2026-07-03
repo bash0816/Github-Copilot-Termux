@@ -74,8 +74,6 @@ copilot-termux setup
 
 ## Known Issues / 既知の問題
 
-- **`/update` changelog**: `/update` 実行時に表示される changelog（更新内容の説明文）が upstream 公式版のまま。実際のインストールコマンドは fork（`@bash0816/copilot-termux`）を正しく指しているため実害はない
-- **`/update` changelog**: The changelog text shown when running `/update` still reflects the upstream official release notes. The actual install command it prints already points to this fork, so no incorrect package is installed
 - 詳細・過去の修正履歴は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
 
 ## Do Not Use / 非推奨

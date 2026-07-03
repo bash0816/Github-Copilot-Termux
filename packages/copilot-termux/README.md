@@ -11,9 +11,6 @@ Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 - TUI (`copilot`): **available** ✅（1.0.65-1）
 - MCP: **available** ✅（1.0.65-1）
 
-既知の問題:
-- `/update` 実行時に表示される changelog が upstream 公式版のまま（実害小・次回対応。詳細は [Known Issues](#known-issues--既知の問題)）
-
 ## Install / インストール
 
 ```sh
@@ -71,11 +68,6 @@ copilot-termux setup
   - `responsesStreamDrive`: AI レスポンスストリーム処理
   - `modelHttp*`: AI モデル HTTP 呼び出し
 - **pty.node**: Termux bionic ネイティブビルドの PTY モジュール
-
-## Known Issues / 既知の問題
-
-- **`/update` changelog**: `/update` 実行時に表示される changelog（更新内容の説明文）が upstream 公式版のまま。実際のインストールコマンドは fork（`@bash0816/copilot-termux`）を正しく指しているため実害はない
-- **`/update` changelog**: The changelog text shown when running `/update` still reflects the upstream official release notes. The actual install command it prints already points to this fork, so no incorrect package is installed
 
 ## License / ライセンス
 
