@@ -69,6 +69,9 @@ try {
   // （旧CHANGELOG_FALLBACK_PATTERNがマッチしていた形）も含める。
   // このパターンは撤去後は一切書き換えられず、元のまま残ることを確認する。
   const CHANGELOG_FALLBACK_FIXTURE = 'if(!ELt.default.gt(u,a))return nj.execute(t,[a])';
+  // UPDATE-006: DO()内のreleases/latest行（変数o,n）と、パッチ対象外のa$e()行（変数a,r）
+  const UPDATE_006_DO_FIXTURE = 'return(await rF(o=>gR("GET /repos/{owner}/{repo}/releases/latest",{owner:"github",repo:"copilot-cli",headers:o}),n)).data';
+  const UPDATE_006_ASE_FIXTURE = 'return(await rF(a=>gR("GET /repos/{owner}/{repo}/releases/latest",{owner:"github",repo:"copilot-cli",headers:a}),r)).data';
   const fakeAppJs = `// Minified ESM stub containing both patterns
 export const WEr = function () { return \`npm i -g @github/copilot@\${someVar}\`; };
 export const checkReleases = function (c) {
@@ -77,6 +80,8 @@ export const checkReleases = function (c) {
 export const runUpdateCommand = async (t, e) => {
   ${CHANGELOG_FALLBACK_FIXTURE};
 };
+export async function DO(t,e){let n=vkt(e);${UPDATE_006_DO_FIXTURE}}
+export async function a$e(t,e){let r=vkt(e);${UPDATE_006_ASE_FIXTURE}}
 `;
   fs.writeFileSync(appJsPath, fakeAppJs, 'utf8');
   console.log('[Setup] Created fake app.js (ESM)');
@@ -167,6 +172,22 @@ console.log('[FIXTURE] WEr() =', WEr());
     'Patched content does not contain __COPILOT_TERMUX_FORK_UPDATE_MESSAGE__ ' +
     '(fork-specific changelog mechanism fully removed)');
 
+  // 7c. UPDATE-006: DO() の releases/latest 行がフォーク npm latest fetch に置換されること
+  console.log('\n[Test] UPDATE-006 fork latest pattern replacement');
+
+  assert(!patchedSource.includes(UPDATE_006_DO_FIXTURE),
+    'UPDATE-006: DO() releases/latest return line is replaced (no longer present as-is)');
+
+  assert(patchedSource.includes('registry.npmjs.org/%40bash0816%2Fcopilot-termux/latest'),
+    'UPDATE-006: patched content contains npm registry URL for fork latest');
+
+  assert(patchedSource.includes('assets:[]'),
+    'UPDATE-006: patched return value includes assets:[] for upstream compatibility');
+
+  // ネガティブ: a$e() の行（変数 a,r）はパッチされないこと
+  assert(patchedSource.includes(UPDATE_006_ASE_FIXTURE),
+    'UPDATE-006 (negative): a$e() releases/latest line with vars a,r is NOT patched (remains as-is)');
+
   // 8. パターン検出エッジケース（複数マッチ・非マッチ時は無変更）
   console.log('\n[Test] Pattern detection edge cases');
 
@@ -187,7 +208,9 @@ console.log('[FIXTURE] WEr() =', WEr());
   //    export を除去した簡易版で実行確認する）
   console.log('\n[Test] Patched code execution validity (logic-level)');
   try {
-    const executableSource = patchedSource.replace(/^export const /gm, 'const ');
+    const executableSource = patchedSource
+      .replace(/^export const /gm, 'const ')
+      .replace(/^export async function /gm, 'async function ');
     const testModule = { exports: {} };
     const testFunc = new Function('module', executableSource + '\nmodule.exports = { WEr };');
     testFunc(testModule);
