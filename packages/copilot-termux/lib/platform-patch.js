@@ -1377,6 +1377,22 @@ function patchAppJsSource(source) {
       (forkLatestMatches ? 'found ' + forkLatestMatches.length + ' times' : 'not found') + ', skipping patch');
   }
 
+  // UPDATE-006b: 「更新なし」の場合のchangelog表示をcurrent(a)からfork-latest(u)に変更する。
+  // upstreamは「更新なし → nj.execute(t,[a])」（aは現在バージョン）だが、
+  // フォーク自身のnpm latestを判定元にした結果、currentがfork-latestより新しい場合でも
+  // aのchangelogが出続ける問題を解消する。
+  // nj.execute内部（fetchReleaseByTag / owner:"github" / changelog.json）は変更しない。
+  const NO_UPDATE_PATTERN = /if\(!ELt\.default\.gt\(u,a\)\)return nj\.execute\(t,\[a\]\)/g;
+  const noUpdateMatches = patched.match(NO_UPDATE_PATTERN);
+  if (noUpdateMatches && noUpdateMatches.length === 1) {
+    patched = patched.replace(NO_UPDATE_PATTERN,
+      'if(!ELt.default.gt(u,a))return nj.execute(t,[u])'
+    );
+  } else {
+    console.warn('[copilot-termux] UPDATE-006b: no-update changelog pattern ' +
+      (noUpdateMatches ? 'found ' + noUpdateMatches.length + ' times' : 'not found') + ', skipping patch');
+  }
+
   return patched;
 }
 
