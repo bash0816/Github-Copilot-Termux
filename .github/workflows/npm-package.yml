@@ -94,9 +94,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
-          CANDIDATE=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').latest_candidate_version")
-          if [ "$VERSION" != "$CANDIDATE" ]; then
-            echo "ERROR: package version $VERSION does not match manifest candidate $CANDIDATE"
+          COPILOT_VERSION=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').copilot_version")
+          if [ "$VERSION" != "$COPILOT_VERSION" ]; then
+            echo "ERROR: package version $VERSION does not match manifest copilot_version $COPILOT_VERSION"
             exit 1
           fi
           cd packages/copilot-termux
@@ -110,13 +110,13 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
-          node -e "
+          MANIFEST_ENV="$MANIFEST" VERSION_ENV="$VERSION" node -e "
             const fs = require('fs');
-            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-            m.latest_candidate_version = '$VERSION';
+            const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
+            m.latest_candidate_version = process.env.VERSION_ENV;
             m.candidate_state = 'published';
             m.last_updated = new Date().toISOString().slice(0, 10);
-            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+            fs.writeFileSync(process.env.MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -141,18 +141,18 @@ jobs:
           # retag-latest-dist-tags.js が candidate タグを旧 latest に退避した後の値を registry から取得する
           # (旧 latest が存在しない/退避されなかった場合は空のまま維持し manifest を壊さない)
           NEW_CANDIDATE=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
-          node -e "
+          MANIFEST_ENV="$MANIFEST" PREVIOUS_AUDITED_VERSION_ENV="${{ inputs.previous_audited_version }}" CANDIDATE_ENV="$CANDIDATE" NEW_CANDIDATE_ENV="$NEW_CANDIDATE" node -e "
             const fs = require('fs');
-            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-            m.previous_stable_version = '${{ inputs.previous_audited_version }}';
-            m.latest_audited_version = '$CANDIDATE';
-            const newCandidate = '$NEW_CANDIDATE';
+            const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
+            m.previous_stable_version = process.env.PREVIOUS_AUDITED_VERSION_ENV;
+            m.latest_audited_version = process.env.CANDIDATE_ENV;
+            const newCandidate = process.env.NEW_CANDIDATE_ENV;
             if (newCandidate && newCandidate !== 'undefined') {
               m.latest_candidate_version = newCandidate;
             }
             m.candidate_state = 'promoted';
             m.last_updated = new Date().toISOString().slice(0, 10);
-            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+            fs.writeFileSync(process.env.MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
           "
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
