@@ -38,41 +38,41 @@ jobs:
 
           # Update copilot-termux-release-manifest.json
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
-          node -e "
+          MANIFEST_ENV="$MANIFEST" NEW_VERSION_ENV="$NEW_VERSION" node -e "
             const fs = require('fs');
-            const m = JSON.parse(fs.readFileSync('$MANIFEST', 'utf8'));
-            m.copilot_version = '$NEW_VERSION';
+            const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
+            m.copilot_version = process.env.NEW_VERSION_ENV;
             m.last_updated = new Date().toISOString().slice(0,10);
             m.candidate_state = 'none';
             m.canonical_package_status = 'not_published';
-            m.latest_candidate_version = '$NEW_VERSION';
-            fs.writeFileSync('$MANIFEST', JSON.stringify(m, null, 2) + '\n');
+            m.latest_candidate_version = null;
+            fs.writeFileSync(process.env.MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
           "
 
           # Update package.json version
           PKG="packages/copilot-termux/package.json"
-          node -e "
+          PKG_ENV="$PKG" NEW_VERSION_ENV="$NEW_VERSION" node -e "
             const fs = require('fs');
-            const p = JSON.parse(fs.readFileSync('$PKG', 'utf8'));
-            p.version = '$NEW_VERSION';
-            fs.writeFileSync('$PKG', JSON.stringify(p, null, 2) + '\n');
+            const p = JSON.parse(fs.readFileSync(process.env.PKG_ENV, 'utf8'));
+            p.version = process.env.NEW_VERSION_ENV;
+            fs.writeFileSync(process.env.PKG_ENV, JSON.stringify(p, null, 2) + '\n');
           "
 
           # Update config/manifest.json (MANIFEST-002: setup.js が実際に読むファイル)
           SETUP_MANIFEST="packages/copilot-termux/config/manifest.json"
-          INTEGRITY=$(npm view "@github/copilot-linuxmusl-arm64@${NEW_VERSION}" dist.integrity 2>/dev/null || echo "")
+          INTEGRITY=$(npm view "@github/copilot-linuxmusl-arm64@${NEW_VERSION}" dist.integrity 2>/dev/null | head -1)
           if [ -z "$INTEGRITY" ]; then
-            echo "WARNING: Could not fetch integrity for @github/copilot-linuxmusl-arm64@${NEW_VERSION}, skipping manifest.json update"
-          else
-            node -e "
-              const fs = require('fs');
-              const m = JSON.parse(fs.readFileSync('$SETUP_MANIFEST', 'utf8'));
-              m.copilot.version = '$NEW_VERSION';
-              m.copilot.integrity = '$INTEGRITY';
-              fs.writeFileSync('$SETUP_MANIFEST', JSON.stringify(m, null, 2) + '\n');
-            "
-            echo "Updated config/manifest.json: version=$NEW_VERSION"
+            echo "ERROR: Could not fetch integrity for @github/copilot-linuxmusl-arm64@${NEW_VERSION}"
+            exit 1
           fi
+          SETUP_MANIFEST_ENV="$SETUP_MANIFEST" NEW_VERSION_ENV="$NEW_VERSION" INTEGRITY_ENV="$INTEGRITY" node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync(process.env.SETUP_MANIFEST_ENV, 'utf8'));
+            m.copilot.version = process.env.NEW_VERSION_ENV;
+            m.copilot.integrity = process.env.INTEGRITY_ENV;
+            fs.writeFileSync(process.env.SETUP_MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
+          "
+          echo "Updated config/manifest.json: version=$NEW_VERSION"
 
           echo "Updated manifest and package.json to version: $NEW_VERSION"
       - name: Analyze NAPI exports for new version
