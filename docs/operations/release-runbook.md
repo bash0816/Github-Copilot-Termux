@@ -32,11 +32,16 @@
 
 1. `@github/copilot` の最新バージョンを npm registry から取得
 2. `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` と比較
-3. 新バージョンが検知されたとき:
-   - `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` を更新
-   - `packages/copilot-termux/package.json` の `version` を更新
-   - 変更をコミット + push（PAT token 使用）
-   - `npm-package.yml` を dispatch（`publish=false`, `retag_latest=false`）
+3. 新バージョンが検知されたとき、以下を全て更新してコミット + push（PAT token 使用）:
+   - `packages/copilot-termux/config/copilot-termux-release-manifest.json`:
+     - `copilot_version`: 新バージョン
+     - `latest_candidate_version`: **`null` のまま保持**（publish 成功後のみ設定される）
+     - `candidate_state`: `'none'`
+   - `packages/copilot-termux/package.json`: `version` フィールド
+   - `packages/copilot-termux/config/manifest.json`: `copilot.version` と `copilot.integrity`
+     - `copilot.integrity` は `npm view @github/copilot-linuxmusl-arm64@{version} dist.integrity` で取得
+     - **取得失敗時は ワークフロー全体が exit 1 で失敗** → GitHub Actions issue が自動起票される
+   - 変更をコミット + push の後、`npm-package.yml` を dispatch（`publish=false`, `retag_latest=false`）
 
 **ログ確認**:
 
@@ -171,6 +176,9 @@ copilot --version
 - Step 3 の smoke test 全て成功
 - `COPILOT_PRIVATE_ARTIFACT_TOKEN` (PAT) が有効
 - npm publish 権限あり（`@bash0816` scope）
+- **publish チェック**: `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` と `packages/copilot-termux/package.json` の `version` が一致していることを確認
+  - Watch が両者を自動で同期しているため、ここまでで既に一致しているはず
+  - 一致していない場合は Step 1 の Watch が失敗している可能性があり、エラーログを確認してから publish を進める
 
 **実行コマンド**:
 
@@ -288,17 +296,23 @@ gh api repos/bash0816/Github-Copilot-Termux/contents/packages/copilot-termux/con
 - Step 6 の latest promote 完了
 - 修正内容が `RELEASES.md` に記載済み
 
+**注意事項**:
+
+`release-finalize.yml` には既知のコマンドインジェクション脆弱性がある（`KNOWN-BUGS.md` CI-001 参照）。
+**本ドキュメントの手順は `release-finalize.yml` を使わず、`--notes-file` を使う安全な方法です。**
+
 **実行コマンド**:
 
 ```bash
-# リリース情報を確認
-cat RELEASES.md | head -20
+# RELEASES.md から該当バージョンのセクションを抽出
+VERSION="1.0.63"
+grep -A 100 "^## ${VERSION}" RELEASES.md | grep -B 100 "^---" | head -n -1 > /tmp/release_notes.txt
 
-# GitHub Release 作成
-gh release create v1.0.63 \
+# GitHub Release 作成（--notes-file を使用）
+gh release create "v${VERSION}" \
   --repo bash0816/Github-Copilot-Termux \
-  --title "v1.0.63" \
-  --notes-file RELEASES.md
+  --title "v${VERSION}" \
+  --notes-file /tmp/release_notes.txt
 ```
 
 **確認**:
@@ -445,6 +459,10 @@ LD_PRELOAD=$(npm list -g @bash0816/copilot-termux --depth=0 | grep copilot-termu
 ## チェックリスト - リリース完了時
 
 - [ ] `@github/copilot` 新バージョン検知（自動または Watch workflow 再実行）
+- [ ] Watch 成功確認:
+  - [ ] `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` が更新済み
+  - [ ] `packages/copilot-termux/config/manifest.json` の `copilot.version` と `copilot.integrity` が更新済み
+  - [ ] `packages/copilot-termux/package.json` の `version` が `copilot_version` と一致
 - [ ] `npm-package.yml` verify 成功
 - [ ] Device A smoke test 成功
   - [ ] `copilot --version`
@@ -454,7 +472,7 @@ LD_PRELOAD=$(npm list -g @bash0816/copilot-termux --depth=0 | grep copilot-termu
 - [ ] Device B smoke test 成功
 - [ ] `npm-package.yml` latest promote 成功
 - [ ] `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `latest_audited_version` 更新確認
-- [ ] GitHub Release 作成完了
+- [ ] GitHub Release 作成完了（`--notes-file` を使用して実行）
 - [ ] `RELEASES.md` 最新化
 
 ---
@@ -471,6 +489,16 @@ LD_PRELOAD=$(npm list -g @bash0816/copilot-termux --depth=0 | grep copilot-termu
 
 ## FAQ
 
+**Q: Watch が失敗した（issue が自動起票された）**
+
+A: 主な原因は `@github/copilot-linuxmusl-arm64` の integrity 取得失敗です。
+   1. GitHub Actions issue のリンクからワークフローログを確認
+   2. npm registry が一時的にダウンしている場合: 数分待ってから GitHub UI で「Re-run failed jobs」を実行
+   3. パッケージ名が変更または新バージョン未公開の場合:
+      - `npm view @github/copilot-linuxmusl-arm64@{VERSION} dist.integrity` を手動実行
+      - 取得できない場合は `packages/copilot-termux/config/manifest.json` を手動で更新
+      - コミット＆push してから Watch ワークフローを再実行（workflow_dispatch）
+
 **Q: candidate タグでテストしたくない**
 
 A: Step 4 をスキップし、RELEASES.md 確認後に直接 latest publish してください。（非推奨）
@@ -482,7 +510,7 @@ A: `copilot-version-watch.yml` の `cron` を調整してください。例：`c
 **Q: manifest の `candidate_state` はいつ更新される？**
 
 A: `npm-package.yml` の publish job が自動更新します。
-- candidate publish 時: `candidate_state = "published"`
+- candidate publish 時: `candidate_state = "published"` + `latest_candidate_version = {VERSION}`
 - latest promote 時: `candidate_state = "promoted"`
 
 **Q: Device A でテスト後、candidate タグを削除したい**
