@@ -145,7 +145,9 @@ async function setupGlibcWrap() {
 
 async function setupGlibcRuntime(versionDir, version) {
   const linux64Dir = path.join(versionDir, 'prebuilds', 'linux-arm64');
-  if (fs.existsSync(path.join(linux64Dir, 'runtime.node'))) {
+  const runtimeNode = path.join(linux64Dir, 'runtime.node');
+  const cliNativeNode = path.join(linux64Dir, 'cli-native.node');
+  if (fs.existsSync(runtimeNode) && fs.existsSync(cliNativeNode)) {
     return;
   }
 

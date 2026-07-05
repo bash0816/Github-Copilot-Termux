@@ -40,6 +40,7 @@ fi
 _GLIBC_LD="${PREFIX}/glibc/lib/ld-linux-aarch64.so.1"
 _GLIBC_LIBS="${PREFIX}/glibc/lib"
 _GLIBC_RUNTIME="${CURRENT}/prebuilds/linux-arm64/runtime.node"
+_GLIBC_CLI_NATIVE="${CURRENT}/prebuilds/linux-arm64/cli-native.node"
 _GLIBC_NODE_AUTO="${CACHE_DIR}/glibc-node/node"
 
 _USE_GLIBC_NODE=""
@@ -52,11 +53,13 @@ fi
 _GLIBC_READY=1
 [ -n "${_USE_GLIBC_NODE}" ] || _GLIBC_READY=0
 [ -f "${_GLIBC_RUNTIME}" ] || _GLIBC_READY=0
+[ -f "${_GLIBC_CLI_NATIVE}" ] || _GLIBC_READY=0
 [ -f "${_GLIBC_LD}" ] || _GLIBC_READY=0
 
 _GLIBC_ANY=0
 [ -n "${_USE_GLIBC_NODE}" ] && _GLIBC_ANY=1
 [ -f "${_GLIBC_RUNTIME}" ] && _GLIBC_ANY=1
+[ -f "${_GLIBC_CLI_NATIVE}" ] && _GLIBC_ANY=1
 [ -f "${_GLIBC_LD}" ] && _GLIBC_ANY=1
 
 if [ "${_GLIBC_READY}" = "1" ]; then
@@ -83,6 +86,7 @@ elif [ "${_GLIBC_ANY}" = "1" ]; then
   echo "[copilot-termux] ERROR: glibc mode partially configured. Missing:" >&2
   [ -n "${_USE_GLIBC_NODE}" ] || echo "  - glibc node (${_GLIBC_NODE_AUTO})" >&2
   [ -f "${_GLIBC_RUNTIME}" ] || echo "  - glibc runtime.node (${_GLIBC_RUNTIME})" >&2
+  [ -f "${_GLIBC_CLI_NATIVE}" ] || echo "  - glibc cli-native.node (${_GLIBC_CLI_NATIVE})" >&2
   [ -f "${_GLIBC_LD}" ] || echo "  - glibc loader (${_GLIBC_LD})" >&2
   echo "[copilot-termux] Run: copilot-termux setup" >&2
   exit 1
