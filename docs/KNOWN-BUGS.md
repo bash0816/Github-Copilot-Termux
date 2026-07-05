@@ -891,12 +891,21 @@ npm error notsup Unsupported platform for @bash0816/copilot-termux@1.0.65-1: wan
 作成した（安全、シェル展開を経由しない）。v1.0.63 のリリースも同様に手動作成されたとみられる
 （`release-finalize.yml` を実際に使った形跡がジョブ履歴上ない）。
 
-### 恒久対応（未実施・次回サイクル）
+### 恒久対応（実施済み・2026-07-05 commit `16839be`）
 
-`release_notes` を `${{ }}` 展開で `run:` に埋め込まず、`env:` 経由で環境変数として渡し、
-シェル側では `"$NOTES"` のように変数展開のみで参照する形に修正する
-（`env: NOTES: ${{ inputs.release_notes }}` → `run: gh release create ... --notes "$NOTES"`）。
+`version` / `release_notes` を `${{ }}` 展開で `run:` に埋め込む代わりに、`env:` 経由で
+`VERSION` / `NOTES_INPUT` として環境変数に渡し、シェル側では `"$VERSION"` / `"$NOTES_INPUT"`
+のように変数参照のみで扱う形に修正した。あわせて不要だった `pull-requests: write` 権限も削除。
+
+GPT-5.5によるG1〜G4レビュー（設計→実装プラン→diff→検証）すべてGoを確認済み。G4では
+`gh`をスタブ化したシェルレベルの再現テストで、修正前コード（`eval`で`${{ }}`直接展開を再現）は
+`$(touch ...)`ペイロードが実際にシェルコマンドとして評価される（`Permission denied`エラーが
+証拠）のに対し、修正後コードでは同じペイロードが`gh`への引数文字列としてしか渡らないことを確認した。
+
 これは GitHub Actions 公式ドキュメントが推奨する script injection 対策の標準パターン。
+
+**未実施**: 実際の `workflow_dispatch` 実行による動作確認（本物の GitHub Release を作ってしまう
+副作用があるため見送り）。次回の本番リリース finalize 実行時に動作確認する。
 
 ---
 
@@ -913,7 +922,7 @@ npm error notsup Unsupported platform for @bash0816/copilot-termux@1.0.65-1: wan
 | BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
 | MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | ✅ 修正済み（commit `1097c77`、2026-06-29。ドキュメント更新漏れを2026-07-03是正） |
 | MANIFEST-002 | Watch自動化がconfig/manifest.jsonを更新せず、実体は追従しない | High | なし | ✅ 恒久対応済み（2026-07-04 commit `d92e68d`、下記参照） |
-| CI-001 | release-finalize.ymlのrelease_notesがコマンドインジェクション脆弱 | Medium | なし | 🔜 未修正（暫定: `gh release create --notes-file`で回避済み） |
+| CI-001 | release-finalize.ymlのrelease_notesがコマンドインジェクション脆弱 | Medium | なし | ✅ 恒久修正済み（2026-07-05 commit `16839be`、下記参照） |
 | UPDATE-004/005 | `/update`のchangelog表示をフォーク独自の複雑な実装で実現 | Low | なし | ✅ 過剰実装と判定し完全撤去。upstream本来のコードに戻す修正完了（2026-07-03）。構文チェック・依存関係検証済み |
 | UPDATE-006 | `/update`が「フォーク自身のlatest」の公式changelogを表示できない | Low | なし | 🔴 TUI実機確認で5回失敗・原因特定不能・修正断念。既知バグとして記録のみ。1.0.68はこのバグを含んだままnpm publish進行 |
 | TAB-001 | TUIでIssues/Pull requestsタブがグレーアウトする | - | なし | ✅ 調査完了・フォーク固有バグではない（upstream仕様）。下記参照 |

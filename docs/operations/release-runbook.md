@@ -298,8 +298,8 @@ gh api repos/bash0816/Github-Copilot-Termux/contents/packages/copilot-termux/con
 
 **注意事項**:
 
-`release-finalize.yml` には既知のコマンドインジェクション脆弱性がある（`KNOWN-BUGS.md` CI-001 参照）。
-**本ドキュメントの手順は `release-finalize.yml` を使わず、`--notes-file` を使う安全な方法です。**
+`release-finalize.yml` のコマンドインジェクション脆弱性（`KNOWN-BUGS.md` CI-001 参照）は2026-07-05 commit `16839be` で修正済み（`env:` 経由化）。
+本ドキュメントの `--notes-file` を使う手順は依然として有効な安全な代替手段だが、`release-finalize.yml` 自体も安全に使えるようになった。
 
 **実行コマンド**:
 
