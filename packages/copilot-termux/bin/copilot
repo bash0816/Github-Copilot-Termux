@@ -49,7 +49,17 @@ elif [ -x "${_GLIBC_NODE_AUTO}" ]; then
   _USE_GLIBC_NODE="${_GLIBC_NODE_AUTO}"
 fi
 
-if [ -n "${_USE_GLIBC_NODE}" ] && [ -f "${_GLIBC_RUNTIME}" ] && [ -f "${_GLIBC_LD}" ]; then
+_GLIBC_READY=1
+[ -n "${_USE_GLIBC_NODE}" ] || _GLIBC_READY=0
+[ -f "${_GLIBC_RUNTIME}" ] || _GLIBC_READY=0
+[ -f "${_GLIBC_LD}" ] || _GLIBC_READY=0
+
+_GLIBC_ANY=0
+[ -n "${_USE_GLIBC_NODE}" ] && _GLIBC_ANY=1
+[ -f "${_GLIBC_RUNTIME}" ] && _GLIBC_ANY=1
+[ -f "${_GLIBC_LD}" ] && _GLIBC_ANY=1
+
+if [ "${_GLIBC_READY}" = "1" ]; then
   _SSL_CERT="${PREFIX}/etc/tls/cert.pem"
   _SSL_CERT_DIR="${PREFIX}/etc/tls"
   if [ ! -r "${_SSL_CERT}" ]; then
@@ -65,9 +75,20 @@ if [ -n "${_USE_GLIBC_NODE}" ] && [ -f "${_GLIBC_RUNTIME}" ] && [ -f "${_GLIBC_L
     --require "${PACKAGE_DIR}/lib/platform-patch.js" \
     "${COPILOT_INDEX}" \
     "$@"
+elif [ "${_GLIBC_ANY}" = "1" ]; then
+  # 注: システムの glibc-repo パッケージ（_GLIBC_LD）を別目的で入れているだけで
+  # copilot-termux 自身の glibc mode セットアップ（setup.js の setupGlibcRuntime/setupGlibcNode）が
+  # 未完の場合も、ここでは「glibc mode 設定が部分的」としてエラー扱いにする。
+  # これは意図的な判断（Free auto mode の既知の壊れた bionic 経路への黙示的フォールバックを防ぐため）。
+  echo "[copilot-termux] ERROR: glibc mode partially configured. Missing:" >&2
+  [ -n "${_USE_GLIBC_NODE}" ] || echo "  - glibc node (${_GLIBC_NODE_AUTO})" >&2
+  [ -f "${_GLIBC_RUNTIME}" ] || echo "  - glibc runtime.node (${_GLIBC_RUNTIME})" >&2
+  [ -f "${_GLIBC_LD}" ] || echo "  - glibc loader (${_GLIBC_LD})" >&2
+  echo "[copilot-termux] Run: copilot-termux setup" >&2
+  exit 1
 fi
 
-# bionic fallback
+# bionic fallback（glibc関連ファイルが一つも無い場合のみ。意図的なbionic-onlyの正当な状態）
 LD_PRELOAD="${PRELOAD}" exec node \
   --require "${PACKAGE_DIR}/lib/platform-patch.js" \
   "${COPILOT_INDEX}" \
