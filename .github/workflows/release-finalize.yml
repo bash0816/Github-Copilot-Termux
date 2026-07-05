@@ -15,18 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          NOTES_INPUT: ${{ inputs.release_notes }}
         run: |
-          VERSION="${{ inputs.version }}"
-          NOTES="${{ inputs.release_notes }}"
+          NOTES="$NOTES_INPUT"
           [ -z "$NOTES" ] && NOTES="upstream @github/copilot@${VERSION} 追従。"
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --notes "$NOTES" \
             --latest 2>/dev/null || echo "Release already exists, skipping"
-        env:
-          GH_TOKEN: ${{ github.token }}
