@@ -14,7 +14,10 @@
 1. `copilot-termux setup` が `@github/copilot-linux-arm64` から glibc 版 `runtime.node` を取得
 2. `copilot-termux setup` が Node.js v26.2.0 glibc linux-arm64 を取得
 3. `bin/copilot` が glibc loader + glibc Node.js + glibc runtime.node を自動検出
-4. glibc モードでは `platform-patch.js`/`bionic-compat.so` を一切使わず実行
+4. glibc モードでも `platform-patch.js` は `--require` され続ける（`bionic-compat.so` のみ不使用）。
+   `platform-patch.js` 内のJSスタブ（authManager*/tokenStore*/capiClientListModels等）は
+   bionic回避目的だけでなくCopilot token交換等の実装を兼ねるため、glibc modeでも意図的に維持する
+   （2026-07-06 GPT-5.5レビュー結論、詳細は KNOWN-BUGS.md BUG-NEW-1参照）
 
 ```sh
 exec env LD_PRELOAD="" \

@@ -56,6 +56,16 @@ Module._resolveFilename = function (request, parent, isMain, options) {
   return origResolve(request, parent, isMain, options);
 };
 
+// [glibc mode の設計方針]
+// glibc mode（COPILOT_TERMUX_GLIBC_MODE=1）は「native実装に全面的に任せるモード」ではない。
+// 正しくは「glibc addon のロードを可能にしつつ、Copilot-Termux が検証済みの
+// JS通信/認証/モデル解決の経路は両モード共通で維持するモード」である。
+// 常時適用されるJSスタブ（isGlibcMode分岐がない箇所）は、bionic回避だけでなく
+// Copilot token交換・Free/Enterprise endpoint補正・モデルstale対策・
+// tools payload補正・stream互換維持を兼ねているため、glibc modeでも意図的に残す。
+// native実装に戻す変更は、スタブ単位ではなくauth/network/model/streamの連鎖単位で
+// 実機検証してから行う（2026-07-06 GPT-5.5レビュー結論）。
+
 // [Android bionic 対応] linuxmusl-arm64/runtime.node は Rust tokio を使う。
 // bionic 上で musl pthread ABI でスレッドを生成すると TUI 起動時に SIGSEGV。
 // runtime.node ロード後に Rust async 初期化関数を no-op に差し替えて阻止する。
@@ -827,6 +837,7 @@ Module._load = function (request, parent, isMain) {
       };
       return { json: JSON.stringify({ kind: 'ok', completion, copilotUsage: null, ttftMs: null, interTokenLatencyMs: null }) };
     };
+    // glibc modeでも維持（isGlibcMode分岐なし）: bionic回避に加えCopilot token交換・アカウント切替キャッシュ管理を兼ねるため
     // === authManager* JS stubs (1.0.64: tokio thread spawn → SIGSEGV on bionic) ===
     const _authMgr = new Map(); // uuid → { cachedInfo, pendingInfo, cachedToken, cachedHost, gen }
     let _modelListCache = null; // capiClientListModels が取得したモデルリストキャッシュ（modelResolver fallback 用）
@@ -1270,6 +1281,10 @@ Module._load = function (request, parent, isMain) {
 // 差し替えるのを阻止する。linuxmusl-arm64/runtime.node の Rust ネットワークスタックは
 // bionic 上の実 I/O で動作しないため、Node.js ビルトイン fetch（動作確認済み）に固定する。
 // GitHub OAuth token via env var or gh CLI (keychain unavailable on bionic)
+
+// glibc modeでも維持（isGlibcMode分岐なし、かつファイルスコープのためそもそも分岐不可）:
+// JS実装のnetworkFetch*/modelHttp*/capiClientListModelsがglobalThis.fetchに依存しているため、
+// ここだけglibc modeでnative fetchに戻すと、JSスタブがRust fetch経由になり前提が崩れる。
 
 const _COPILOT_TOKEN_DEFAULT_TTL_MS = 28 * 60 * 1000;
 function _normalizeCopilotTokenExpiry(expiresAt, now = Date.now()) {
