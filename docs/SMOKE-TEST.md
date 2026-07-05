@@ -1,7 +1,8 @@
 # Smoke Test — リリース前動作確認手順
 
 > **対象バージョン**: 1.0.65〜  
-> **最終更新**: 2026-06-28
+> **最終更新**: 2026-07-06（TC-1をglibc mode前提に更新。旧記載はmodelsFilterToPickerフォールバックのみを
+> 前提にしており、実際に採用された解決策(glibc mode)の確認項目が欠けていた）
 
 ---
 
@@ -29,24 +30,37 @@ GitHub Copilot の権限は Chat とエージェント（Agent）の 2 種類あ
   ```
   copilot --version
   ```
+- **glibc mode が有効化されていることを確認**（BUG-NEW-1の実際の解決策。詳細は
+  `docs/free-auto-mode-analysis.md`・`docs/KNOWN-BUGS.md` BUG-NEW-1参照）:
+  ```bash
+  copilot-termux setup   # glibc runtime.node / cli-native.node / glibc Node.js を取得
+  sh -x "$(command -v copilot)" --version 2>&1 | grep -E "_GLIBC_READY=1|glibc mode partially|bionic fallback" | tail -5
+  ```
+  `_GLIBC_READY=1` の分岐（`COPILOT_TERMUX_GLIBC_MODE=1` での起動）に入っていることを確認する。
+  `glibc mode partially configured` エラーが出た場合は `copilot-termux setup` が未完了。
 
 ---
 
-### TC-1: Free — Chat (TUI)
+### TC-1: Free — Chat (TUI, glibc mode)
 
 ```bash
 copilot
 ```
 
 **期待動作**:
+- glibc mode（`COPILOT_TERMUX_GLIBC_MODE=1`）で起動する（上記前提の確認コマンドでready済みのこと）
 - TUI が起動する
-- `policy.state=enabled` かつ denylist 外のモデルが picker に表示される（`modelsFilterToPicker` フォールバック）
+- `policy.state=enabled` かつ denylist 外のモデルが picker に表示される（`modelsFilterToPicker` は
+  bionic/glibc両モード共通のJSスタブとして維持されているため、glibc modeでも同じ挙動になる）
 - チャットを送信すると応答が返ってくる
 
 **確認ポイント**:
-- ❌ `Auto-mode unavailable and no fallback model could be resolved` が出ないこと
+- ❌ `Auto-mode unavailable and no fallback model could be resolved` が出ないこと（BUG-NEW-1本体の確認。
+  glibc modeにより bionic の tokio pthread ABI非互換が回避され解消しているはず）
+- ❌ `glibc mode partially configured` エラーが出ないこと（`bin/copilot` の partial state 検出）
 - ❌ `gpt-4.1` / `gpt-4.1-2025-04-14` が picker に表示されないこと（denylist 除外）
-- デバッグログで `modelsFilterToPicker:fallback` が出ること（picker フォールバック動作確認）
+- デバッグログで `modelsFilterToPicker:fallback` が出ること（picker フォールバック動作確認。
+  glibc modeでも常時適用されるJSスタブのため出て正常）
 
 ---
 
