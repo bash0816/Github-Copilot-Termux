@@ -1,8 +1,8 @@
 # Known Bugs — 未解決バグ一覧
 
-> **記録日**: 2026-06-27（最終更新: 2026-07-03）  
+> **記録日**: 2026-06-27（最終更新: 2026-07-05）  
 > **Opus レビュー**: 2026-06-27 実施済み  
-> **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006 + UPDATE-006b 実装済み（2026-07-04）: DO()のlatest取得先をnpm dist-tagに差し替え＋「更新なし」時のchangelog引数[a]→[u]に変更。テスト26 PASS・グローバルインストール更新済み。TUI目視確認・npm publish待ち。
+> **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006 は5回のTUI実機確認で原因特定不能につき断念・既知バグとして記録のみ（下記参照。上の一文は古い記述だったため訂正）。**npm latest は 1.0.68 として公開・GitHub Release済み（2026-07-03）**。MANIFEST-002 は2026-07-04 commit `d92e68d` で恒久対応済み。CI-001（release-finalize.yml のコマンドインジェクション）は未修正のまま残存。
 
 ---
 
@@ -912,7 +912,7 @@ npm error notsup Unsupported platform for @bash0816/copilot-termux@1.0.65-1: wan
 | UPDATE-003 | 起動時通知バナーが upstream 公式のバージョンを参照 | Medium | なし | ✅ UPDATE-001と同じ`registerHooks()`フックで実装完了・実機検証済み（2026-07-02） |
 | BUG-NEW-1 | Free TUI auto モードで 400 | High | MODEL-001 | 🔍 修正実装済み・TC-1 実機確認待ち |
 | MANIFEST-001 | wrapper 1.0.65 が upstream 1.0.64 をダウンロードする | Medium | なし | ✅ 修正済み（commit `1097c77`、2026-06-29。ドキュメント更新漏れを2026-07-03是正） |
-| MANIFEST-002 | Watch自動化がconfig/manifest.jsonを更新せず、実体は追従しない | High | なし | ✅ 手動修正済み（2026-07-03、下記参照） |
+| MANIFEST-002 | Watch自動化がconfig/manifest.jsonを更新せず、実体は追従しない | High | なし | ✅ 恒久対応済み（2026-07-04 commit `d92e68d`、下記参照） |
 | CI-001 | release-finalize.ymlのrelease_notesがコマンドインジェクション脆弱 | Medium | なし | 🔜 未修正（暫定: `gh release create --notes-file`で回避済み） |
 | UPDATE-004/005 | `/update`のchangelog表示をフォーク独自の複雑な実装で実現 | Low | なし | ✅ 過剰実装と判定し完全撤去。upstream本来のコードに戻す修正完了（2026-07-03）。構文チェック・依存関係検証済み |
 | UPDATE-006 | `/update`が「フォーク自身のlatest」の公式changelogを表示できない | Low | なし | 🔴 TUI実機確認で5回失敗・原因特定不能・修正断念。既知バグとして記録のみ。1.0.68はこのバグを含んだままnpm publish進行 |
@@ -922,7 +922,7 @@ npm error notsup Unsupported platform for @bash0816/copilot-termux@1.0.65-1: wan
 
 **重要度**: High
 **発見日**: 2026-07-03（ユーザーが「copilotのこのマシンに68入ってないじゃないか」と指摘し発覚）
-**状態**: ✅ 手動修正済み（次回Watch実行分から要恒久対応、下記参照）
+**状態**: ✅ 恒久対応済み（2026-07-04 commit `d92e68d`。手動修正で発覚した問題に加え、Watch自動化そのものを修正した）
 
 ### 症状
 
@@ -959,11 +959,19 @@ release-manifest.json・package.json・platform-patch.jsのみ）。加えて、
    3パターンすべてが1回ずつマッチ・置換されること（`skipping patch`警告が出ないこと）を確認
 6. `copilot -p "1+1は"` → 正常応答（クラッシュ・エラーなし）を確認
 
-### 恒久対応（次サイクルで検討・今回スコープ外）
+### 恒久対応（実施済み・2026-07-04 commit `d92e68d`）
 
 `copilot-version-watch.yml`のcommitステップに`config/manifest.json`の`copilot.version`/`integrity`
-自動更新を追加する（npm registryのtarball integrityを取得するステップが必要）。STEP B/C
-（`docs/watch-1068-automation-plan.md`）と合わせて次サイクルで着手する。
+自動更新ロジックを追加した:
+- `npm view @github/copilot-linuxmusl-arm64@${NEW_VERSION} dist.integrity` でintegrityを取得し、
+  取得失敗時はWARNINGスキップではなく`exit 1`で確実に失敗させる
+- `npm view`出力を`| head -1`でフィルタし改行混入を防止
+- `git add`の対象ファイルリストに`packages/copilot-termux/config/manifest.json`を追加
+- 同commitで`npm-package.yml`のpublishチェックも`latest_candidate_version`から`copilot_version`に変更、
+  `node -e`内のシェル変数展開を`process.env`経由に統一（インジェクション対策）
+
+上記により、次回Watch実行分から`config/manifest.json`が自動追従する。旧記載「次サイクルで検討・スコープ外」は
+2026-07-05のドキュメント実態確認で古いと判明したため訂正。
 
 ### 他プロジェクト(ClaudeCode-Termux-private)由来バグの横展開確認（2026-07-02）
 
