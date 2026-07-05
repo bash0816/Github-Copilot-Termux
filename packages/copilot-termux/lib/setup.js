@@ -193,7 +193,12 @@ async function setupGlibcNode() {
   // glibc動的リンカ経由でないとTermux(bionic)上ではglibc Nodeバイナリを実行できないため、
   // ld-linux 経由で `node -v` を実行しバージョン文字列を確認する。
   function verifyNodeBinary(binPath) {
-    const out = execFileSync(glibcLd, ['--library-path', glibcLibs, binPath, '-v'], { encoding: 'utf8' }).trim();
+    // bin/copilot と同様、Termux由来の LD_PRELOAD (bionic向けexecフック) を明示的にクリアしないと
+    // glibc loaderがロードするlibc.soがinvalid ELF headerエラーになる（2026-07-06実機確認）。
+    const out = execFileSync(glibcLd, ['--library-path', glibcLibs, binPath, '-v'], {
+      encoding: 'utf8',
+      env: { ...process.env, LD_PRELOAD: '' },
+    }).trim();
     return out === `v${version}`;
   }
 
