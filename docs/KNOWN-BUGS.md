@@ -338,6 +338,22 @@ async function WEr(t, e) {
 **重要度**: High  
 **影響バージョン**: 1.0.65
 
+### 🔴 2026-07-06 追記: 上記の修正（2026-06-28実装）はその後別方式に置き換わった
+
+本セクションの当初の解決策（`modelsFilterToPicker`に`policy.state=enabled`フォールバックを追加）は
+2026-06-28時点のものだが、その後2026-06-29〜30の調査で、bionic libcのpthread ABIが
+`runtime.node`のtokioランタイムと非互換であることが根本原因と判明。最終的に採用された解決策は
+**glibc mode**（agy-termuxと同じ手法。glibc版Node.js + glibc版runtime.nodeを別途取得し、
+glibc loader経由で起動）で、commit `651bde3`（1.0.65-2、2026-06-30）以降、現在のnpm latest（1.0.68）にも
+継続して含まれる。詳細は `docs/free-auto-mode-analysis.md` 参照。
+
+2026-07-06、この glibc mode 実装について初めてGPT-5.5の正式コードレビューを実施。
+4件のBlocker（partial state fallback・setup atomic化・バージョン再検証・JSスタブ棚卸し）を
+指摘され、うち3件（bin/copilot partial state検出、setup.js atomic化、glibc-nodeバージョン再検証）を
+commit `27185d4`・`7b6c614`で修正しGoを取得。残る1件（JSスタブ棚卸し）は「実装変更不要、
+glibc modeでもJSスタブを意図的に維持する設計」という結論（B案）で解消し、
+`platform-patch.js`にコメントとして明記した。
+
 ### 症状
 Free TUI 起動後 `Auto-mode unavailable and no fallback model could be resolved.`
 
