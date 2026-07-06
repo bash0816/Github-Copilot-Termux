@@ -31,8 +31,10 @@ function parseVer(v) {
   return { nums, pre };
 }
 
-// このプロジェクトの prerelease 表記は x.y.z-N（N は数字のみ）を前提としており、
-// 汎用 semver のような英数混在 prerelease 識別子の比較は想定していません。
+// このプロジェクトの `-N` サフィックスは、汎用 semver のプレリリース識別子ではなく、
+// 「正式版リリース後に追加したfork独自パッチのリビジョン番号」を意味する。
+// suffixなし = revision 0、`-N` = revision N として扱い、Nが大きいほど新しい。
+// （例: 1.0.68 < 1.0.68-1 < 1.0.68-2）
 // returns negative if a < b, 0 if equal, positive if a > b
 function compareVersions(a, b) {
   const pa = parseVer(a);
@@ -42,28 +44,14 @@ function compareVersions(a, b) {
     const nb = pb.nums[i] || 0;
     if (na !== nb) return na - nb;
   }
-  // prerelease: no pre = stable > has pre (semver spec)
-  if (pa.pre === null && pb.pre !== null) return 1;
-  if (pa.pre !== null && pb.pre === null) return -1;
-  if (pa.pre !== null && pb.pre !== null) {
-    const aParts = pa.pre.split('.');
-    const bParts = pb.pre.split('.');
-    const len = Math.max(aParts.length, bParts.length);
-    for (let j = 0; j < len; j++) {
-      const ap = aParts[j], bp = bParts[j];
-      if (ap === undefined) return -1;
-      if (bp === undefined) return 1;
-      const an = Number(ap), bn = Number(bp);
-      if (!isNaN(an) && !isNaN(bn)) {
-        if (an !== bn) return an - bn;
-      } else {
-        if (ap < bp) return -1;
-        if (ap > bp) return 1;
-      }
-    }
-    return 0;
-  }
-  return 0;
+  // このフォークの `-N` サフィックスは一般semverの「正式版より前のプレリリース」ではなく、
+  // 「正式版リリース後に追加したfork独自パッチのリビジョン番号」を意味する。
+  // suffixなし = revision 0、`-N` = revision N として扱い、Nが大きいほど新しいとみなす。
+  // （例: 1.0.68 < 1.0.68-1 < 1.0.68-2）
+  // parseVer前提: N は数字のみ（本ファイル冒頭コメントの前提を踏襲）。
+  const ra = pa.pre === null ? 0 : Number(pa.pre);
+  const rb = pb.pre === null ? 0 : Number(pb.pre);
+  return ra - rb;
 }
 
 function isPrerelease(v) {
@@ -171,6 +159,9 @@ async function runNotify() {
 }
 
 module.exports = { runUpdate, runNotify };
+
+// テスト専用export・CLI実行経路には影響しない（node:test用）
+module.exports.__test = { compareVersions };
 
 // CLI entry
 if (require.main === module) {
