@@ -1,4 +1,28 @@
-## 1.0.68 — 2026-07-04 🚀 Latest / 最新版
+## 1.0.68-1 — 2026-07-07 🚀 Latest / 最新版
+
+upstream `@github/copilot@1.0.68` 追従（wrapper バージョンは `1.0.68-1`）。1.0.68 からの追加修正。
+
+**修正内容**
+
+- **Free TUI で auto モードしか選べず 400 エラーになる問題を修正**（BUG-NEW-1）: bionic libc の pthread ABI が native ランタイムと非互換だったことが根本原因と判明し、glibc mode（glibc 版 Node.js + glibc 版ネイティブモジュールを別途取得して起動）に変更。実機 TUI 確認済み
+- **MCP 経由のアカウント権限取得が不安定な問題を修正**（MODEL-002）: アカウント切り替え時に権限情報（copilotUser）が古いまま残る問題（AUTH-001 と共通根）を修正。TUI でのアカウント切り替え（Enterprise ↔ Free）を実機確認済み
+- **`copilot update` がフォーク独自パッチを古い npm latest へ自動ダウングレードする問題を修正**（UPDATE-007）: バージョン比較ロジックが fork 独自の `-N` サフィックス運用（正式版リリース後の追加パッチ）を一般的な semver のプレリリース運用と誤認していたため発生。実機で `copilot update` が正しく動作することを確認
+
+**既知の問題**
+
+- **アカウント切り替え直後の TUI footer「AIC used」表示が疑問視されている**（AIC-001、未確定）: Enterprise → Free 切り替え後に AI 消費量表示が出る挙動について、正常かどうか未切り分けのまま記録。詳細は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照。npm publish のブロッカーにはしていません
+
+### Install
+
+```sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+```
+
+---
+
+## 1.0.68 — 2026-07-04 / 旧版
 
 upstream `@github/copilot@1.0.68` 追従。
 
