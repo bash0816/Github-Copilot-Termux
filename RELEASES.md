@@ -4,13 +4,12 @@ upstream `@github/copilot@1.0.69` 追従。
 
 **変更内容**
 
-- **NAPI自動監査でnewTokio 3件を自動パッチ**: `networkFetchNextRequestId`・`sessionStoreExecuteReadOnlyAsync`・`sessionStoreInsertAssistantUsageEventWithRuntimeDefaults`
-- **`gitHashFilesPrefixedAsync`(git snapshot/rewind関連API)をpendingスタブとして追加**: SnapshotManagerのファイルスナップショット作成時に実呼び出しされる箇所があるため、latest昇格前にファイル変更 + `/snapshot`・`/rewind` 実機確認を実施し、クラッシュ・エラーがないことを確認済み
+- upstream の内部改善に追従。今回のバージョンでは Termux 向けの追加修正はありません
+- ファイル変更を伴う操作(スナップショット・巻き戻し機能)を実機で動作確認済み
 
 **既知の問題**
 
-- 前バージョンからの既知の問題(AIC-001等)は引き続き未確定。詳細は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
-- newUnknown 137件のbehavioral_stubs自動追加は GitHub Issue #11 で追跡中(質的に異常ではないと判定済み)
+- 前バージョンからの既知の問題は引き続き未確定。詳細は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
 
 ### Install
 
