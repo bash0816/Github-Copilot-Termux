@@ -18,6 +18,33 @@ if (process.report) {
 const Module = require('module');
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
+
+// git CLIを配列引数で呼ぶ（shell経由なし、インジェクション対策）。失敗時は例外を投げず安全な既定値を返す。
+async function runGit(cwd, args) {
+  try {
+    const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    return stdout;
+  } catch (_) {
+    return null;
+  }
+}
+
+// backupFile() は戻り値を `${r.substring(9,25)}-${Date.now()}` としてバックアップファイル名に使う。
+// substring(9,25) は "git-sha1:" (9文字) プレフィックスを除いた先頭16文字を取る計算であり、
+// ネイティブ実装の実際の戻り値フォーマットが "git-sha1:<40hex>" であることを示している。
+// 互換性のため git hash-object 相当（blob SHA1）を "git-sha1:" プレフィックス付きで返す。
+async function hashFileContent(gitRoot, filePath) {
+  try {
+    const out = await runGit(gitRoot, ['hash-object', filePath]);
+    if (!out) return null;
+    return `git-sha1:${out.trim()}`;
+  } catch (_) {
+    return null;
+  }
+}
 
 const _pkgVersion = (() => {
   try { return require(path.join(__dirname, '..', 'package.json')).version; } catch (_) { return '1.0.65'; }
@@ -112,6 +139,58 @@ Module._load = function (request, parent, isMain) {
         gitStatusPorcelainAllAsync: async () => null,
         gitCurrentBranchRemoteAsync: async () => null,
         gitWorkingTreeDiffStatsAsync: async () => ({ linesAdded: 0, linesRemoved: 0 }),
+        gitFindRootWithOptionalWorktreeResolutionAsync: async (cwd) => {
+          const out = await runGit(cwd || process.cwd(), ['rev-parse', '--show-toplevel']);
+          const root = out ? out.trim() : null;
+          return root ? { found: true, gitRoot: root } : { found: false };
+        },
+        gitCommitShaAsync: async (gitRoot) => {
+          const out = await runGit(gitRoot, ['rev-parse', 'HEAD']);
+          return out ? out.trim() : null;
+        },
+        gitStatusFilesAsync: async (gitRoot) => {
+          // --untracked-files=all: 未追跡ディレクトリを "?? dir/" に畳まず、配下ファイルを個別に列挙させる。
+          // SnapshotManager.backupFile はディレクトリを保存できないため、ディレクトリ単位の畳み込みだと
+          // 未追跡ディレクトリ配下のファイルが rollback 対象から漏れる。
+          const out = await runGit(gitRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+          if (!out) return [];
+          const entries = out.split('\0').filter(Boolean);
+          const results = [];
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            const status = entry.slice(0, 2);
+            const relPath = entry.slice(3);
+            // rename/copy: X or Y can be 'R'/'C' (index or worktree side); -z format is "to\0from\0"
+            const isRenameOrCopy = status[0] === 'R' || status[0] === 'C' || status[1] === 'R' || status[1] === 'C';
+            if (isRenameOrCopy && entries[i + 1] !== undefined) {
+              i++; // skip the old path field
+            }
+            // 削除(D)されたファイルは lstat/hash 対象が存在しないため除外する。
+            if (status[0] === 'D' || status[1] === 'D') continue;
+            results.push({ path: path.join(gitRoot, relPath), status });
+          }
+          return results;
+        },
+        gitHashFilesPrefixedAsync: async (gitRoot, files) => {
+          const list = Array.isArray(files) ? files : [];
+          const out = [];
+          for (const p of list) {
+            const hash = await hashFileContent(gitRoot, p);
+            if (hash) out.push({ path: p, hash });
+          }
+          return out;
+        },
+        gitHashSingleFileAsync: async (gitRoot, filePath) => {
+          const hash = await hashFileContent(gitRoot, filePath);
+          return hash || '';
+        },
+        gitUntrackedPathsWithOptionalDirectoryAsync: async (gitRoot, opts) => {
+          const args = ['ls-files', '--others', '--exclude-standard'];
+          if (opts && opts.directory) args.push('--directory');
+          const out = await runGit(gitRoot, args);
+          if (!out) return [];
+          return out.split('\n').filter(Boolean);
+        },
       };
       for (const [key, stub] of Object.entries(GIT_ASYNC_STUBS)) {
         if (typeof result[key] === 'function') result[key] = stub;

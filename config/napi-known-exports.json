@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_audited_copilot_version": "1.0.65",
+  "last_audited_copilot_version": "1.0.69",
   "last_updated": "2026-06-28",
   "tokio_noop_prefixes": [
     "ahpRelay",
@@ -2888,7 +2888,13 @@
     "gitWorkingTreeStatusAsync",
     "gitStatusPorcelainAllAsync",
     "gitCurrentBranchRemoteAsync",
-    "gitWorkingTreeDiffStatsAsync"
+    "gitWorkingTreeDiffStatsAsync",
+    "gitFindRootWithOptionalWorktreeResolutionAsync",
+    "gitCommitShaAsync",
+    "gitStatusFilesAsync",
+    "gitHashFilesPrefixedAsync",
+    "gitHashSingleFileAsync",
+    "gitUntrackedPathsWithOptionalDirectoryAsync"
   ],
   "pending_git_async_stubs": [
     "gitBranchDiffChangesAsync",
@@ -2897,18 +2903,14 @@
     "gitCheckoutToStateAsync",
     "gitCleanWorkingTreeAsync",
     "gitCommandWithOptionalTimeoutAsync",
-    "gitCommitShaAsync",
     "gitComputeWorkspaceDiffAsync",
     "gitCreateIssueWorktreeAsync",
     "gitCreatePullRequestWorktreeAsync",
     "gitCreateWorktreeAsync",
     "gitDiffChangesAsync",
     "gitFindRootForPermissionsAsync",
-    "gitFindRootWithOptionalWorktreeResolutionAsync",
     "gitGetWorktreesDirAsync",
     "gitHashFilesMapAsync",
-    "gitHashFilesPrefixedAsync",
-    "gitHashSingleFileAsync",
     "gitIsRepositoryAsync",
     "gitIsValidBranchNameAsync",
     "gitLegacyRemotesAsync",
@@ -2918,9 +2920,7 @@
     "gitResetToCommitAsync",
     "gitResetWorkingTreeAsync",
     "gitStageFilesAsync",
-    "gitStatusFilesAsync",
     "gitSubmodulePathsOrEmptyAsync",
-    "gitUntrackedPathsWithOptionalDirectoryAsync",
     "gitWorkingDirectoryContextAsync",
     "gitWorkingTreeStatusOrCleanAsync",
     "gitWorktreeChangeSummaryAsync"
