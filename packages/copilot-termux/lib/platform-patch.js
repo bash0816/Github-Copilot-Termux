@@ -38,7 +38,7 @@ async function runGit(cwd, args) {
 // 互換性のため git hash-object 相当（blob SHA1）を "git-sha1:" プレフィックス付きで返す。
 async function hashFileContent(gitRoot, filePath) {
   try {
-    const out = await runGit(gitRoot, ['hash-object', filePath]);
+    const out = await runGit(gitRoot, ['hash-object', '--', filePath]);
     if (!out) return null;
     return `git-sha1:${out.trim()}`;
   } catch (_) {
