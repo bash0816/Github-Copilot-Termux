@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "last_audited_copilot_version": "1.0.69",
-  "last_updated": "2026-06-28",
+  "last_updated": "2026-07-10",
   "tokio_noop_prefixes": [
     "ahpRelay",
     "ahpRelayAuthenticate",
