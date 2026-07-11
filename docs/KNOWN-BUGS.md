@@ -1,6 +1,6 @@
 # Known Bugs — 未解決バグ一覧
 
-> **記録日**: 2026-06-27（最終更新: 2026-07-07）  
+> **記録日**: 2026-06-27（最終更新: 2026-07-11、AGENT-001追加: 1.0.70で`-p`が無期限ハングする新規回帰・release blocker）  
 > **Opus レビュー**: 2026-06-27 実施済み  
 > **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006 は5回のTUI実機確認で原因特定不能につき断念・既知バグとして記録のみ（下記参照。上の一文は古い記述だったため訂正）。**npm latest は 1.0.68 として公開・GitHub Release済み（2026-07-03）**。MANIFEST-002 は2026-07-04 commit `d92e68d` で恒久対応済み。CI-001（release-finalize.yml のコマンドインジェクション）は未修正のまま残存。
 
@@ -1344,3 +1344,71 @@ Enterprise→Free方向だけ逆に見える点が気になった、との指摘
    Enterprise→Free切り替え時に実際にキャプチャして確認
 
 上記が揃うまでnpm publishのブロッカーにはしない（ユーザー判断、2026-07-07）。
+
+---
+
+## AGENT-001: `copilot -p`（非対話/エージェントモード）が1.0.70で無期限にハングする（新規回帰・要修正）
+
+**重要度**: Critical（release blocker）
+**発見日**: 2026-07-11（Claudeによる実機スモークテストで発見）
+**影響バージョン**: 1.0.70（1.0.69は正常動作を確認済み）
+
+### 症状
+
+`copilot -p "<任意のプロンプト>"` を実行すると、stdinの有無・内容（空/`</dev/null`/パイプ）に
+関わらず一貫してハングし、無応答のまま終了しない。`timeout`で強制終了(SIGTERM)すると
+`Exiting…`とだけ出力される。TUI単体の起動（`copilot`をTTY経由で起動、代替画面バッファへの
+遷移やタイトル設定などの起動シーケンス）は正常に確認できており、TUI自体は壊れていない。
+
+### 再現手順
+
+```sh
+# glibc mode readyであることを確認済みの状態で
+$ timeout 30 copilot -p "1+1は" </dev/null
+[copilot-termux] UPDATE-006: fork latest pattern not found, skipping patch
+[copilot-termux] UPDATE-006b: no-update changelog pattern not found, skipping patch
+(30秒間無出力のままタイムアウト、exit 124)
+```
+
+プロンプト内容を変えても（例: "こんにちはを英語に訳して"）同様に再現するため、
+プロンプト内容依存ではなく`-p`モード自体の問題。
+
+### 根本原因（内部ログで確認済み）
+
+`~/.copilot/logs/process-<timestamp>-<pid>.log` に以下が記録されている：
+
+```
+[ERROR] Error making GitHub API request: TypeError: s.then is not a function
+[WARNING] Retrying request to GitHub API in 5 seconds. Attempt 1/5
+[ERROR] Unhandled Rejection: Failed to parse URL from undefined
+TypeError: Failed to parse URL from undefined
+(以降 10秒→20秒→...と指数バックオフでAttempt 5/5まで繰り返し失敗)
+```
+
+`platform-patch.js`内に該当コード（`s.then`や当該GitHub APIリクエスト処理）は存在せず、
+vendorされた`@github/copilot`本体（1.0.70の新しいminifiedバンドル）側で、あるAPI呼び出しの
+戻り値がPromiseでない（またはURLがundefined）状態になっている。`UPDATE-006`パッチ
+（`fork latest pattern not found, skipping patch`）とは別のコードパスであり、無関係。
+
+### 切り分け結果（1.0.69 vs 1.0.70 比較、symlink切替のみで実施・ダウンロード不要）
+
+```sh
+$ ln -sfn ~/.copilot-termux/1.0.69 ~/.copilot-termux/current
+$ timeout 30 copilot -p "1+1は" </dev/null
+1+1は2です。
+(AI Credits 0.41、約25秒で正常応答)
+exit: 0
+
+$ ln -sfn ~/.copilot-termux/1.0.70 ~/.copilot-termux/current   # 復元
+```
+
+1.0.69は正常応答、1.0.70のみハングする。**1.0.70固有の新規回帰と断定できる。**
+（`~/.copilot-termux/1.0.69`ディレクトリが既に手元に存在していたためsymlink切替のみで
+比較でき、実環境の破壊的変更は発生していない。）
+
+### 対応方針
+
+`docs/SMOKE-TEST.md` TC-2/TC-4（`-p`モードのクラッシュ・無限ループなし）の合格基準に
+明確に違反しているため、原因（`@github/copilot`側の該当API呼び出し箇所の特定、
+Node.js v26.2.0との相性か、1.0.70側の実装変更かの切り分け）が判明し修正されるまで、
+1.0.70のcandidate publish・latest昇格はブロックする。
