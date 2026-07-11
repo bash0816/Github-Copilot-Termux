@@ -1412,6 +1412,7 @@ $ ln -sfn ~/.copilot-termux/1.0.70 ~/.copilot-termux/current   # 復元
 明確に違反しているため、原因（`@github/copilot`側の該当API呼び出し箇所の特定、
 Node.js v26.2.0との相性か、1.0.70側の実装変更かの切り分け）が判明し修正されるまで、
 1.0.70のcandidate publish・latest昇格はブロックする。
+<<<<<<< HEAD
 
 ---
 
