@@ -1,6 +1,6 @@
 # Known Bugs — 未解決バグ一覧
 
-> **記録日**: 2026-06-27（最終更新: 2026-07-11、AGENT-001追加: 1.0.70で`-p`が無期限ハングする新規回帰・release blocker）  
+> **記録日**: 2026-06-27（最終更新: 2026-07-12、AGENT-001訂正: 「無期限ハング」ではなく約15分50秒で完走する異常遅延と判明・根本原因特定・G1設計レビューNo-Go→修正方針確定）  
 > **Opus レビュー**: 2026-06-27 実施済み  
 > **状態**: AUTH-001 修正済み・enterprise 実機確認済み。UPDATE-001・UPDATE-003 は `registerHooks()` 方式で修正・実機検証済み（2026-07-03、ユーザーTUI目視確認済み）。UPDATE-004/005（changelog表示機能）は過剰実装と判断し完全撤去済み（2026-07-03、詳細下記）。UPDATE-006 は5回のTUI実機確認で原因特定不能につき断念・既知バグとして記録のみ（下記参照。上の一文は古い記述だったため訂正）。**npm latest は 1.0.68 として公開・GitHub Release済み（2026-07-03）**。MANIFEST-002 は2026-07-04 commit `d92e68d` で恒久対応済み。CI-001（release-finalize.yml のコマンドインジェクション）は未修正のまま残存。
 
@@ -1412,3 +1412,88 @@ $ ln -sfn ~/.copilot-termux/1.0.70 ~/.copilot-termux/current   # 復元
 明確に違反しているため、原因（`@github/copilot`側の該当API呼び出し箇所の特定、
 Node.js v26.2.0との相性か、1.0.70側の実装変更かの切り分け）が判明し修正されるまで、
 1.0.70のcandidate publish・latest昇格はブロックする。
+
+---
+
+### 追記・訂正（2026-07-12、Claude実機再調査 + G1設計レビュー）
+
+**「無期限ハング」の訂正**: 上記の再現手順は`timeout 30`で切っていたための誤認。実際には
+`copilot -p "echo hello" --allow-all-tools` を打ち切らずに待ったところ、**15分50秒後に正常完了**した
+（`hello`が返り、AI Credits/Tokens等の出力も正常）。無限ハングではなく、異常に長いリトライの末に
+成功する遅延バグである。
+
+**根本原因を`platform-patch.js`内に特定**（上記「`platform-patch.js`内に該当コードは存在せず」は誤り）。
+vendor本体`app.js`の汎用fetchヘルパーは
+`let o = w.networkFetchNextRequestId(), s = w.networkFetchStreamStart(o, r); s.then(...)`
+という規約（第1引数=requestId・第2引数=リクエスト仕様、戻り値は直接thenableなPromise）で
+`networkFetchStreamStart`を呼ぶ。この規約は1.0.69/1.0.70とも同一（grepで確認済み）。
+
+一方`platform-patch.js:372`の`networkFetchStreamStart`実装は引数1個（`req`）のみを受け取り、
+`{ requestId, response }`というラップしたオブジェクトを返す。このミスマッチにより:
+- 渡された`requestId`（数値）が`req`として扱われるため`req.url`が`undefined`→
+  `fetch(undefined,...)`→`TypeError: Failed to parse URL from undefined`
+- 戻り値がPromiseでないため`s.then is not a function`
+
+が発生し、GitHub API系リクエスト（カスタムエージェント読込等）が5回リトライ×指数バックオフ
+（5/10/20/40/80秒）を繰り返して遅延の大半を占めていたと判明。
+
+**1.0.69で症状が出ない理由は未解明**（1.0.69のapp.jsにも同一の`networkFetchStreamStart(o,r)`
+呼び出しパターンが存在するにも関わらず、実機テストではエラーログなし・21.6秒で完走）。
+「1.0.70固有の実装不整合」ではなく「1.0.70で発現を確認」が正確な表現（GPT-5.6-terra G1指摘）。
+
+**G1設計レビュー（GPT-5.6-terra、2026-07-12）: 1回目No-Go。**
+指摘: bionicモードでは`networkFetchNextRequestId`自体が既存の`TOKIO_PATTERN`no-op化により
+`undefined`を返す。渡された`requestId`をそのまま`_nfMap`のキーに使う単純な修正案だと、
+bionicモードで全リクエストが`undefined`キーに衝突し、並行リクエストのcancel/close対応が壊れる。
+
+**修正方針（terra承認済み、実装前）**:
+1. `networkFetchStreamStart(requestId, req)` に変更・Promiseを直接返す（ラップしない）
+2. bionicモード（`!isGlibcMode`ブロック内）で`networkFetchNextRequestId`をJSで単調増加する
+   一意ID生成に置き換える（no-opのままにしない）
+3. `_nfIdSeq`は削除せず、上記ID生成に転用
+4. `handle = requestId`とし、`_nfMap`・cancel・closeは全て同じrequestIdで相関させる
+5. `isGlibcMode`による`networkFetchStreamStart`自体の無効化（native復帰）は不採用
+   （既存方針「glibc modeでも検証済みJS通信経路を両モード共通で維持する」に反するため）
+
+**G1設計レビュー（GPT-5.6-terra、2026-07-12）: 2回目Go。** 上記修正方針でBlocker解消を確認。
+追加指摘（Non-blocker、実装時に反映）:
+- `_nfIdSeq`の宣言位置は「ファイル最上位」ではなく、`Module._load`のコールバック内・`isGlibcMode`
+  判定より前が正しい（bionic上書きとJS `networkFetch*`実装の両方から参照でき、他のruntime addon
+  ロードと不要に状態を共有しない）
+- bionic実機確認は別端末のユーザー手動運用に委ねてよいが、staging/main昇格の前提にはできない。
+  install・launch・auth・`-p`・並行通信orキャンセルの確認結果とログ抜粋を`docs/`に残すこと
+- `platform-patch.hook-verify.js`にnetworkFetchテストを追加すること。bionic相当テストは環境変数を
+  外すだけでなく、`runtime.node`のexport経由で`networkFetchNextRequestId()`が上書き後の関数である
+  ことを検証する
+- `_nfMap`の検証はクロージャ内部への直接アクセスでなく、cancel/close後の`read`が`{done:true}`に
+  なること・AbortSignal発火・別IDの通信continuationで間接的に確認する
+
+**G2実装プランレビュー（GPT-5.6-terra）: 3回連続No-Go（2026-07-12）。**
+1回目: (a)smoke testがグローバル版を叩き編集中ワークスペースを検証しない、(b)`platform-patch.hook-verify.js`が`runtime.node`をロードせず新パッチ経路を検証できない。
+2回目: (a)新規非同期テストなのに`hook-verify.js`の`async main()`化が未計画、(b)`networkFetchStreamClose`専用テスト欠如、(c)smoke testのエラー照合がログのみでstdout/stderr未確認。
+3回目: (a)start/readテストで「戻り値がthenableであること」の明示検証が不足、(b)smoke testが4エラーパターン不在だけで`timeout`終了コード（124でないこと）を見ていない、(c)bionic ID生成テストが「関数存在確認」止まりで「連続呼出しで異なるID」「start/cancel/closeの相関キーとしての一気通貫テスト」になっていない。
+
+いずれも個別には正当な指摘だが、3回ともコア修正方針（G1確定分）ではなく「プラン文章上のテストアサーション記述の厳密さ」への指摘が中心。
+
+**難所判定・Fable 5セカンドオピニオン実施（2026-07-12）。** ユーザー判断によりG2のスコープを縮小: G2は「実装順序・影響範囲・ロールバック」（CLAUDE.md本来の確認観点）のみで判定し、3回分の指摘（thenable明示検証・timeout終了コード確認・bionic ID一気通貫テスト等）は捨てずにG3（実装後、実コード差分に対して判定）の必須チェックリストとして持ち越す方針を採用。
+
+**G2実装プランレビュー: スコープ縮小後、4〜10回目でGo（2026-07-12、GPT-5.6-terra）。**
+4回目〜10回目の指摘はいずれもプロセス/シェルスクリプトの厳密さに関するもの（ブランチが`main`のままだった点、docs/コードのコミット分離、G3を検証実施前に実施する順序、`git fetch`/`merge-base`/`pull --ff-only`各コマンドの失敗時停止処理の分離）で、コアの修正方針（G1確定分）への異論はなかった。最終確定した実装手順:
+
+1. `git fetch origin`→`merge-base --is-ancestor`判定→`git pull --ff-only`（各コマンド失敗時は個別に`exit 1`）
+2. `git checkout -b feature/copilot-networkfetch-streamstart-fix`
+3. `docs/KNOWN-BUGS.md`をdocs単独コミット
+4. `platform-patch.js`本体修正（G1確定分）。コミットしない
+5. `platform-patch.hook-verify.js`に新規テスト追加。コミットしない
+6. `git diff`をG3コーディングレビュー（GPT-5.6-terra）に提出しGo取得
+7. hook-verify実行、全PASS確認
+8. smoke test実施（ワークスペース版`bin/copilot`、sentinel+`find -newer`方式、timeout終了コード判定）
+9. TUI回帰確認（glibcモードのみ、このマシンでは）
+10. 実施結果をG4検証レビュー（GPT-5.6-terra）に提出しGo取得
+11. G3/G4の指摘・Go根拠・実施ログ抜粋を本ファイルに追記、docs追加コミット
+12. コード単独コミット
+13. ブランチpush・PR作成
+
+**余談（2026-07-12、副産物の発見）:** このレビュー往復中、`~/.codex/AGENTS.md`（Codexグローバル設定）に別プロジェクト（CluadeCode-Termux）向けルールが横展開されており内容が古い（GPT-5.5表記等）ことが判明した。本バグ修正とは別タスクとして記録済み（Claude側メモリ`project_agents_md_stale`）。
+
+実装（Haiku）・G3/G4は別途進行中。
