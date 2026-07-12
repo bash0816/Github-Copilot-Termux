@@ -1496,4 +1496,286 @@ bionicモードで全リクエストが`undefined`キーに衝突し、並行リ
 
 **余談（2026-07-12、副産物の発見）:** このレビュー往復中、`~/.codex/AGENTS.md`（Codexグローバル設定）に別プロジェクト（CluadeCode-Termux）向けルールが横展開されており内容が古い（GPT-5.5表記等）ことが判明した。本バグ修正とは別タスクとして記録済み（Claude側メモリ`project_agents_md_stale`）。
 
-実装（Haiku）・G3/G4は別途進行中。
+**実装（Haiku、2026-07-12）完了。** ブランチ`feature/copilot-networkfetch-streamstart-fix`（050d146から分岐）。docs単独コミット`53b4bad`。`platform-patch.js`/`platform-patch.hook-verify.js`はG1/G2確定方針通りに修正（作業ツリー、未コミット）。`platform-patch.hook-verify.js`実行結果: 既存26件+新規15件=**41 PASS / 0 FAIL**。
+
+**G3コーディングレビュー: 1回目でGo（2026-07-12、GPT-5.6-terra）。** Blockerなし。実際のapp.js呼び出し規約との整合、`_nfIdSeq`のスコープ、bionic上書き、テストのfixture実装（`runtime.node`実ロード経路を通している）を確認。
+Non-blocker: (a) 1.0.64〜1.0.68の旧app.jsは旧契約（1引数・ラップ返却）のため、rollbackでこれらのバージョンを使う場合はパッチ側も対応版に戻す必要がある、(b) 将来的にvendor app.jsの呼び出し形を検査する静的契約テストがあると更新追従が堅くなる、(c) requestIdの型検証はないが内部発行IDのみが渡されるためセキュリティ上の問題はない。
+
+**smoke test（Haiku、2026-07-12）: 成功。** ワークスペース版`bin/copilot -p "echo hello" --allow-all-tools`実行、exit code 0、**所要時間43秒**（修正前15分50秒から大幅短縮）、`hello`正常出力、stdout・新規ログとも4エラーパターン検出なし。
+
+**TUI回帰確認: ユーザー本人が実施し Pass（2026-07-12）。** このマシン（glibc mode）で`bin/copilot`を起動・安全な終了・クラッシュなしを確認。
+
+**G4検証レビュー: 1回目GPT-5.6-terra、コミット/push/PR = Go（条件付き）、npm publish = No-Go（2026-07-12）。**
+Blocker: (a) vendor実`app.js`の呼び出し規約をterra自身が実コードから検証できていない、(b) bionicモードの実機検証がfixtureモックのみで実ネットワーク経由の確認がない、(c) npm pack/installした配布物でのスモークテストがない。
+
+**Blocker(a)解消: vendor実`app.js`（`~/.copilot-termux/current/app.js`）をgrepして確認済み。**
+実際の呼び出しは `let o=w.networkFetchNextRequestId(),s=w.networkFetchStreamStart(o,r),...;s.then(g=>{...w.networkFetchStreamClose(g.handle)...})` であり、
+修正が想定した「第1引数=requestId・第2引数=req、戻り値=直接thenableなPromise」と完全一致。
+
+**Blocker(b)着手中に新規発見: bionicモード実機テストでSIGSEGV（2026-07-12）。**
+このマシンはTermuxネイティブnode（Bionic、NDKビルド）が標準。glibcモードは`copilot-termux setup`で別途導入した追加レイヤーで、
+`bin/copilot`は`_GLIBC_READY=1`のためglibc分岐を常用している。bionic分岐（`LD_PRELOAD=bionic-compat.so node --require platform-patch.js index.js -p ...`、
+`COPILOT_TERMUX_GLIBC_MODE`未設定）を直接実行して確認したところ、**修正後のコードでは起動後約4秒でSIGSEGVによりクラッシュする。**
+
+strace調査結果（`strace -f`でクラッシュ直前を確認）:
+```
+9859  connect(26, {sa_family=AF_UNIX, sun_path="/dev/socket/dnsproxyd"}, 110) = 0
+9859  write(26, "getaddrinfo api.individual.githu"..., 57) = 57
+9859  read(26, ...) = 44
+9859  close(26)                         = 0
+9859  --- SIGSEGV {si_signo=SIGSEGV, si_code=SEGV_MAPERR, si_addr=NULL} ---
+（Node内蔵クラッシュハンドラがsigactionをSIG_DFLに戻した後、tgkillで自身にSIGSEGVを再送し終了）
+```
+`api.individual.githubcopilot.com`のDNS解決（Android `dnsproxyd`経由の`getaddrinfo`）直後にNULLポインタ参照でクラッシュしている。
+
+**訂正（2026-07-12、gdb実機調査で確定）:** 上記時点では「Node本体（Bionicビルド）のfetch/undici実装側の問題」と推測していたが、誤りだった。
+`pkg install gdb`（`libpython3.14.so`不足のため`pkg upgrade python`も実施）でデバッガを導入し、`handle`せず素通しでクラッシュを捕捉したところ:
+
+```
+Thread 27 "tokio-rt-worker" received signal SIGSEGV, Segmentation fault.
+#0-6  すべて .../prebuilds/linuxmusl-arm64/runtime.node 内（シンボルなし、stripped）
+```
+
+クラッシュしたスレッドは`libuv-worker`/`V8Worker`（Node本体）ではなく、**vendorのネイティブRustアドオン
+（`runtime.node`）が自前で持つtokio非同期ランタイムのワーカースレッド**（`tokio-rt-worker`が約20個常駐）。
+Node本体のfetch/undiciとは無関係。
+
+**トリガー関数の特定（instrumentation実施）:** `platform-patch.js`のスクラッチコピーに、`runtime.node`の全exportをラップして
+呼び出しを逐次ログするdiagnostic計装を追加し再実行。クラッシュ直前の最終呼び出しは:
+
+```
+CALL mcpRegistryIsMcpAppsActive
+CALL settingsIsFeatureFlagEnabled
+CALL mcpClientConnectStreamableHttpWithHandlersAndOnclose   ← クラッシュ直前
+```
+
+`mcpClientConnectStreamableHttpWithHandlersAndOnclose`は、リモートMCPサーバー（今回は`github-mcp-server`、
+`https://api.individual.githubcopilot.com/mcp/readonly`）への接続に使うStreamable HTTPトランスポート関数で、
+`napi-known-exports.json`に存在するが`platform-patch.js`ではno-op化・JS代替のいずれも未実施。
+vendor実`app.js`の呼び出し箇所では、capability分岐に応じて兄弟関数
+（`mcpClientConnectStreamableHttp`/`WithHandlers`/`WithNotifications`、SSE版の
+`mcpClientConnectSseWithHandlers`/`WithHandlersAndOnclose`）も同じ経路で使われうる
+（stdio系`mcpClientConnectStdio*`・`mcpClientConnectSandboxedStdio`・`mcpClientConnectBridge`はローカル
+サブプロセス/パイプ通信のため対象外と推定）。
+
+これは`cli-native.node`の`getColorScheme`等（本ファイル1344行目付近、「Rust tokioがbionicでSIGSEGV」として
+既にno-op化済み）と**全く同じクラスのバグ**。BUG-NEW-3（本ファイル記載、`capiClientEnableModelPolicy`等を
+「HTTP fetch(tokio)を使う可能性→bionicでSIGSEGVリスク」として2026-06-28に予見、未実装のまま放置）が
+指摘した懸念が、別の具体的な関数（`mcpClientConnectStreamableHttpWithHandlersAndOnclose`）で実際に顕在化した。
+
+**修正前コードでも同一クラッシュに到達しない理由:** 修正前は`networkFetchStreamStart(req)`が1引数のみ受け取るため、
+vendorが渡す`(o, r)`のうち`req`には実際には`requestId`（`o`）が渡り、bionicモードでは`networkFetchNextRequestId`がTOKIO一括no-op化により`undefined`。
+結果として`req.url`が`undefined`となり、`fetch()`が実際のDNS解決に到達する前にJSレベルで失敗し（`Failed to parse URL from undefined`）、
+5回のリトライ×指数バックオフ（AGENT-001本文記載の遅延の正体）に入っていた。この間、後続処理（MCPサーバー接続を含む
+セッション初期化の以降のステップ）には一度も到達していなかった。今回の修正で`networkFetchStreamStart`自体は正しく
+動作するようになった結果、処理が先に進み、**別の未スタブ関数`mcpClientConnectStreamableHttpWithHandlersAndOnclose`に
+到達してクラッシュするようになった**（AGENT-001の修正ロジック自体にバグはない。修正が届いたことで、既存の別の
+潜在バグ（BUG-NEW-3系統）に到達可能になったという関係）。
+
+**影響範囲の評価:** このマシンを含め、`copilot-termux setup`でglibcモードを構成済みの環境では`bin/copilot`は常にglibc分岐を使うため
+実運用への影響はない（本セクション冒頭のTUI回帰確認・smoke testは全てglibc mode）。影響するのはglibc未セットアップの
+bionic-onlyフォールバック環境のみ、かつリモートMCPサーバー（HTTP/SSEトランスポート）を使う場合のみ。
+
+**次アクション（未実施・G1設計レビュー待ち）:** `mcpClientConnectStreamableHttpWithHandlersAndOnclose`と
+上記兄弟関数（SSE/StreamableHttp系のみ、stdio系は対象外）を、`getColorScheme`と同様の手法でno-op化するか、
+呼び出し元が「接続失敗」として扱える安全な返り値/reject化を検討する。ID: **MCP-BIONIC-001**として本節に追記し追跡する。
+
+### G1 1回目レビュー: No-Go（2026-07-12、GPT-5.6-terra）
+
+Blocker: `raceConnectTimeout`のcatch節は接続エラーを握りつぶさず`throw V2e(error)`で再送出する（実コード確認済み）。
+「catchに入るので`-p`本体が継続する」という設計前提が実コードと不一致。上位呼び出し元での隔離・継続を実機で
+確認する必要があるとの指摘。Non-blocker: 同期throwの安全性・対象6関数の網羅性・別PR推奨は妥当と評価。
+
+### スコープ拡大の発覚（2026-07-12、追加instrumentation調査）
+
+G1指摘を受け、`pendingConnections`まわりの実コード（`.catch(g=>{...recordFailure...,throw g})`→
+`pendingConnections[e]`に格納→後段で`try{await a}catch{}`により回収）を確認し、個別サーバー失敗が
+プロセス全体をクラッシュさせない設計になっていることの裏付けを得た上で、実際にスタブを適用して
+bionicモードで再テストしたところ、**`mcpClientConnectStreamableHttpWithHandlersAndOnclose`のクラッシュは
+解消したが、直後に別のネイティブ関数`capiClientRetrieveAvailableModels`（モデル一覧取得、`capiClient*`系）で
+クラッシュが再発**した。
+
+`runtime.node`の実exportsを`capiClient*`/`mcpClient*`でフィルタして全量ダンプし、家族単位（ファミリー）で
+分類：
+
+- **stub対象（ネットワークI/O、tokioリスク）**: `capiClientCreateModelSession`, `capiClientEnableModelPolicyWithClient`,
+  `capiClientListModelsWithClient`, `capiClientPredictIntent`, `capiClientResolveChatModelWithClient`,
+  `capiClientRetrieveAvailableModels`, `mcpClientConnectSseWithHandlers`, `mcpClientConnectSseWithHandlersAndOnclose`,
+  `mcpClientConnectStreamableHttp`, `mcpClientConnectStreamableHttpWithHandlers`,
+  `mcpClientConnectStreamableHttpWithHandlersAndOnclose`, `mcpClientConnectStreamableHttpWithNotifications`
+- **対象外（pure/ローカルI/Oと推定）**: `capiClientParseErrorEnvelope`, `capiClientPlanCreateInput`,
+  `mcpClientConnectBridge`, `mcpClientConnectSandboxedStdio`, `mcpClientConnectStdio*`（stdio系全般）、
+  `mcpClient{CallTool,ListTools,Request,Notify,Close,...}`等の接続後操作系（未検証だが今回のスコープ外、
+  クラッシュ未観測）
+
+**スコープの再定義（ユーザー承認済み、2026-07-12）**: 「bionicモードでMCP/モデル一覧を使えるようにする」のではなく、
+「未対応のtokio系関数を軒並みクラッシュではなく清潔なエラーに変える」を目標とする。`capiClientRetrieveAvailableModels`は
+`-p`実行に必須のため、これをstubすると**bionicモードでの`-p`は`-p`タスクの内容に関わらず「モデル一覧取得失敗」で
+綺麗に失敗する**（機能は使えないが、クラッシュはしない）。
+
+**実証結果（上記12関数を一括stub、2026-07-12）**: `-p "echo hello" --allow-all-tools`をbionicモードで実行、
+**exit code 1（SIGSEGVなし）**、以下の正常なアプリケーションエラーで終了:
+```
+Error: Failed to load models
+Error: capiClientRetrieveAvailableModels unavailable on bionic (native tokio disabled to avoid SIGSEGV)
+Copilot could not retrieve the list of available models.
+To resolve this, try the following: ...
+```
+プロセスクラッシュ（SIGSEGV/exit 139）から、アプリケーションレベルの正常なエラー終了（exit 1）への転換を確認。
+
+### G1 2回目レビュー: No-Go（2026-07-12、GPT-5.6-terra）
+
+前回Blocker（`raceConnectTimeout`の例外伝播）は解消と評価。`capiClientRetrieveAvailableModels`の実証は
+「十分に強い」と評価された。新たなBlocker:
+
+- 「未対応のtokio系ネイティブ関数を軒並みクリーンエラー化」という目標は12関数のヒューリスティックだけでは
+  保証できない。stdio接続は成功しうるため、その後の`mcpClientListTools`/`mcpClientServerInfo`/`mcpClientRequest`/
+  `mcpClientClose`等がtokioを使わず安全である実証がない。
+- `runtime.node`のexport増減・名称変更を検出する更新追従策が未定義。
+
+terraは二択を提示: (1) 目標を「確認済み12関数のクラッシュのクリーンエラー化」に狭めstdio/接続後操作系を
+明示的に保証対象外とする、(2) stdio MCPのconnect→initialize→list tools→call→closeを実機検証して広い目標を維持する。
+
+**ユーザー判断（2026-07-12）: (1) 目標を狭める。** 以下の通りスコープを確定する:
+
+- **保証する範囲**: 上記12関数（`capiClient*`6種・`mcpClient*Connect`のSSE/StreamableHttp系6種）の呼び出しが
+  クラッシュ（SIGSEGV）ではなくクリーンなアプリケーションエラーになること
+- **保証しない範囲（明示的に対象外）**: stdio系MCPサーバーの接続後操作（`mcpClientListTools`等）の安全性、
+  上記12関数以外の未発見のtokio系ネイティブ関数。これらは今回のスコープ外であり、将来別途発見・対応する
+  （whack-a-mole的に追加発見された場合はKNOWN-BUGS.mdに追記し、本アプローチと同じ手法で個別対応する）
+- **更新追従**: `runtime.node`のexport一覧が変わった場合の検出策は今回は導入しない（既存の`napi-known-exports.json`
+  監査フロー・G1/G2/G3レビューの中で、将来のバージョン更新時に都度確認する運用に委ねる）
+
+**次アクション**: 上記の狭めたスコープでG1を再提出し、Go取得後にG2実装プランレビューへ進む。
+
+### G1 3回目レビュー: No-Go（2026-07-12、GPT-5.6-terra、workspace-writeで実機実行）
+
+今回はterra自身が実マシン上でコマンドを実行し検証した（`cd`ミスにより前回は実ファイルを見れていなかった
+ことが判明、実パスを渡して再依頼）。terraが独立に確認した事実:
+
+- `~/.copilot-termux/current`は1.0.70、実runtimeは`prebuilds/linuxmusl-arm64/runtime.node`
+- 対象12関数は全て実exportとして存在することを確認
+- 現行パッチ（スタブ未実装）を正しい相対パスでpreloadして`-p`実行 → 実際に`Segmentation fault`/`exit=139`を再現
+- MCP6関数は実`app.js`で共通の`async IIFE→raceConnectTimeout→catch`経路にあることを確認
+- `capiClientCreateModelSession`・`capiClientPredictIntent`・`capiClientRetrieveAvailableModels`は
+  各呼び出し箇所に`try/catch`あり
+- **`capiClientEnableModelPolicyWithClient`・`capiClientResolveChatModelWithClient`は呼び出し箇所に
+  `try/catch`がない**（スタブがthrowしても綺麗なエラーになる保証なし）
+- **`capiClientListModelsWithClient`は現行app.jsに呼び出し箇所が0件**（今回バージョンでは未使用、
+  クラッシュ対象としての根拠なし）
+
+Blocker: 12関数一括の保証根拠が不足。実機確認済みなのは`capiClientRetrieveAvailableModels`と
+`mcpClientConnectStreamableHttpWithHandlersAndOnclose`の2関数のみ。
+
+terra提案・**ユーザー承認（2026-07-12）: スコープを2関数のみに最終確定**。
+
+## MCP-BIONIC-001（確定・実装対象）
+
+**stub対象（2関数のみ）:**
+```
+capiClientRetrieveAvailableModels
+mcpClientConnectStreamableHttpWithHandlersAndOnclose
+```
+
+**動作**: bionicモード（`!isGlibcMode`）限定で、呼び出し即座に`throw new Error(...)`する同期スタブに置換。
+`raceConnectTimeout`（MCP接続）・`app.js`内`try/catch`（モデル一覧取得）の既存エラー処理経路を通り、
+SIGSEGVクラッシュ（exit 139）ではなくクリーンなアプリケーションエラー（exit 1、vendor既定のエラー
+メッセージ）になることを実機確認済み。
+
+**未検証事項として個別記録・別タスク化（今回のスコープ外）:**
+
+| 関数 | 状態 | 備考 |
+|------|------|------|
+| `capiClientCreateModelSession` | export確認済み・呼び出し元に`try/catch`あり・クラッシュ未実証 | モデルセッション作成、`-p`実行に関与する可能性 |
+| `capiClientEnableModelPolicyWithClient` | export確認済み・呼び出し元に`try/catch`なし・クラッシュ未実証 | スタブがthrowすると未処理例外になるリスクあり。stub化する場合は呼び出し元に境界処理の追加が必要 |
+| `capiClientPredictIntent` | export確認済み・呼び出し元に`try/catch`あり・クラッシュ未実証 | ツール意図予測 |
+| `capiClientResolveChatModelWithClient` | export確認済み・呼び出し元に`try/catch`なし・クラッシュ未実証 | モデル解決。上記EnableModelPolicyWithClientと同じ懸念 |
+| `capiClientListModelsWithClient` | export確認済みだが現行app.js(1.0.70)に呼び出し箇所0件 | 今回バージョンでは未使用。将来のバージョンで使われ始めた場合に再評価 |
+| `mcpClientConnectSseWithHandlers` | export確認済み・クラッシュ未実証 | MCP SSEトランスポート（Handlersのみ、Onclose無し） |
+| `mcpClientConnectSseWithHandlersAndOnclose` | export確認済み・クラッシュ未実証 | MCP SSEトランスポート（Onclose付き）。StreamableHttp版と同じ経路構造だが未実証 |
+| `mcpClientConnectStreamableHttp` | export確認済み・クラッシュ未実証 | MCP StreamableHttpトランスポート（プレーン） |
+| `mcpClientConnectStreamableHttpWithHandlers` | export確認済み・クラッシュ未実証 | MCP StreamableHttpトランスポート（Handlersのみ） |
+| `mcpClientConnectStreamableHttpWithNotifications` | export確認済み・クラッシュ未実証 | MCP StreamableHttpトランスポート（Notifications付き） |
+
+また、以下も本調査中に判明した恒久的なスコープ外事項として記録する:
+- stdio系MCPサーバーの接続後操作（`mcpClientListTools`/`mcpClientServerInfo`/`mcpClientRequest`/
+  `mcpClientClose`等）の安全性は未検証
+- `runtime.node`のexport増減・名称変更に対する自動追従策は未導入（将来のバージョン更新時のG1/G2/G3
+  レビューで都度確認する運用）
+
+**次アクション**: 2関数スコープでG1を最終再提出しGo取得 → G2実装プランレビュー。
+
+### G1 4回目レビュー: Go（2026-07-12、GPT-5.6-terra、実機実行で確認）
+
+terraが実機で以下を独立確認: 対象2関数が実exportとして存在、vendor app.js 1.0.70で各1箇所のみ呼び出し、
+`capiClientRetrieveAvailableModels`は`try/catch`で処理、`mcpClientConnectStreamableHttpWithHandlersAndOnclose`は
+async IIFE経由でreject化され`raceConnectTimeout`の既存経路に渡ることを確認。現行コード（スタブ未実装）を
+再実行し`Segmentation fault`/`exit=139`を再現。
+
+**Blockerなし。Go。**
+
+Non-blocker（G2で計画に織り込む）:
+- 各代入に`typeof result[名前] === 'function'`ガードを付ける
+- fixtureテストに「bionicで両スタブが同期Errorをthrowし、メッセージを含む」検証を追加
+- 実装後、指定コマンドで`exit≠139`・エラーメッセージ含有を実機記録する
+- 残り10関数は機能回復ではなくスコープ外（本セクション表の通り別記録済み）
+- upstream更新時のexport・呼び出し元再監査は別途必要（自動化なし、レビュー時に都度確認）
+
+### G2実装プランレビュー: Go（2026-07-12、GPT-5.6-terra）
+
+Blockerなし。差し込み位置（`if (!isGlibcMode)`内）・エラー経路（try/catch・async IIFE経由のreject化）を
+実コードで確認。Non-blocker: fixtureの偽runtime.node exportsに対象2関数の追加が必要、テスト総数は実行結果の
+実数を記録、glibc非退行は実機コマンドで確認、コミット時はAGENT-001分と混在させない。
+
+### 実装（Haiku、2026-07-12）完了
+
+`platform-patch.js`の`if (!isGlibcMode)`ブロック内、`networkFetchNextRequestId`定義の直後に
+`BIONIC_SIGSEGV_STUBS`配列（対象2関数）とtypeof存在確認ガード付きの置換ループを追加。
+`platform-patch.hook-verify.js`のfixture（`fakeRuntimeNodeExports()`）に対象2関数のダミーpropertyを追加し、
+両関数が同期Errorをthrowしメッセージに関数名を含むことを確認する新規テストを追加。
+AGENT-001の未コミット変更には触れていないことを`git diff`で確認済み。
+
+**hook-verify実行結果: 43 PASS / 0 FAIL**（既存41件＋MCP-BIONIC-001新規2件）。
+
+### 実機検証（Claude、2026-07-12）
+
+**bionicモード**（`LD_PRELOAD=bionic-compat.so`、`COPILOT_TERMUX_GLIBC_MODE`未設定、修正後）:
+```sh
+$ cd packages/copilot-termux && unset COPILOT_TERMUX_GLIBC_MODE
+$ LD_PRELOAD="$PWD/lib/bionic-compat.so" timeout 30 node --require ./lib/platform-patch.js ~/.copilot-termux/current/index.js -p "echo hello" --allow-all-tools
+exit=1 elapsed=6s（修正前はexit=139/SIGSEGV）
+Error: Failed to load models
+Error: capiClientRetrieveAvailableModels unsupported on Android bionic (native tokio disabled to avoid SIGSEGV)
+Copilot could not retrieve the list of available models.
+To resolve this, try the following: ...
+```
+SIGSEGVクラッシュ（exit 139）からアプリケーションレベルの正常なエラー終了（exit 1）への転換を確認。
+
+**glibcモード非退行確認**（`bin/copilot`、`_GLIBC_READY=1`）:
+```sh
+$ timeout 60 bin/copilot -p "echo hello" --allow-all-tools
+exit=0 elapsed=25s
+hello（正常出力、AI Credits/Tokens等も正常表示）
+```
+glibcモードへの影響なし（本修正は`!isGlibcMode`ブロック内のみ）を確認。
+
+### G3コーディングレビュー（統合差分）: Go（2026-07-12、GPT-5.6-terra）
+
+AGENT-001とMCP-BIONIC-001を合わせた統合差分をレビュー。vendor実`app.js`の呼び出し規約再確認・
+`capiClientRetrieveAvailableModels`のtry/catch確認・`mcpClientConnectStreamableHttpWithHandlersAndOnclose`の
+async IIFE経由reject化確認・hook-verify 43 PASS/0 FAIL・構文チェックを実施。**Blockerなし。Go。**
+Non-blocker: 旧vendor版へのrollback時は旧パッチとの組合せ確認が必要、upstream export消滅の自動検出はない、
+glibc側で対象2関数が未置換であることを明示するfixtureは将来追加すると良い。
+
+### G4検証レビュー（最終）: Go（2026-07-12、GPT-5.6-terra、実機再実行で確認）
+
+terraが実機で以下を再実行し独立確認: hook-verify 43 PASS/0 FAIL、bionicモード exit=1（SIGSEGVなし、
+想定エラーメッセージ確認）、glibcモード exit=0・27秒・正常出力、`npm pack`のtarballに実行時ファイルが
+含まれ`platform-patch.js`がワークスペース版とSHA-256一致することも確認。
+
+**Blockerなし。Go。次アクション: コード単独コミット→push→PR作成に進んでよい（npm publishは別判定）。**
+
+推奨コミット順序: (1) `docs/KNOWN-BUGS.md`をdocs単独コミット、(2) `platform-patch.js`・
+`platform-patch.hook-verify.js`をコード単独コミット。
+
+**次アクション**: ユーザー承認を得てコミット・push・PR作成（Haiku実施）。npm publishは別途承認・判定。
