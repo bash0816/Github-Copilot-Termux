@@ -1,4 +1,27 @@
-## 1.0.69 — 2026-07-08 🚀 Latest / 最新版
+## 1.0.70 — 2026-07-12 🚀 Latest / 最新版
+
+upstream `@github/copilot@1.0.70` 追従。
+
+**修正内容**
+
+- **`copilot -p` が異常に遅い問題を修正**（AGENT-001）: 内部のネットワーク処理呼び出しの引数不整合により、通常数十秒で終わる処理が最大16分近くかかる場合がありました。修正により通常の速度に戻っています
+- **一部の環境で MCP 接続・モデル一覧取得時にクラッシュする問題を修正**（MCP-BIONIC-001）: 対象は `copilot-termux setup` を実施していない一部のフォールバック環境のみで、通常セットアップ済みの環境には影響しません。該当環境ではクラッシュせず、明確なエラーメッセージを返すようになりました
+
+**既知の問題**
+
+- 前バージョンからの既知の問題は引き続き未確定。詳細は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
+
+### Install
+
+```sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+```
+
+---
+
+## 1.0.69 — 2026-07-08 / 旧版
 
 upstream `@github/copilot@1.0.69` 追従。
 
