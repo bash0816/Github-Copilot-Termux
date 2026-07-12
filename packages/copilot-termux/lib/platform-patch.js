@@ -103,6 +103,7 @@ Module._load = function (request, parent, isMain) {
       path.basename(request) === 'runtime.node') {
     if (result.__copilotTermuxPatched) return result;
     result.__copilotTermuxPatched = true;
+    let _nfIdSeq = 3e6;
     const isGlibcMode = !!process.env.COPILOT_TERMUX_GLIBC_MODE;
     if (!isGlibcMode) {
       // Rust tokio を使う関数群を no-op に差し替え。
@@ -115,6 +116,23 @@ Module._load = function (request, parent, isMain) {
       for (const key of Object.keys(result)) {
         if (TOKIO_PATTERN.test(key) && typeof result[key] === 'function') {
           result[key] = () => undefined;
+        }
+      }
+      // networkFetchNextRequestId は networkFetchStreamStart/RequestCancel の相関キーとして
+      // 実際に使われるため、no-opのままにはできない。TOKIO_PATTERNの一括no-op化で
+      // 潰された直後にJSの単調増加ID生成で上書きする。
+      result.networkFetchNextRequestId = () => 'nf-' + (++_nfIdSeq);
+      // MCP-BIONIC-001: 実機でSIGSEGV確認済みの2関数を、bionicモード限定でクリーンエラー化する。
+      // 対象外の残り10関数はdocs/KNOWN-BUGS.mdのMCP-BIONIC-001セクションに未検証事項として個別記録済み。
+      const BIONIC_SIGSEGV_STUBS = [
+        'capiClientRetrieveAvailableModels',
+        'mcpClientConnectStreamableHttpWithHandlersAndOnclose',
+      ];
+      for (const _key of BIONIC_SIGSEGV_STUBS) {
+        if (typeof result[_key] === 'function') {
+          result[_key] = () => {
+            throw new Error(`${_key} unsupported on Android bionic (native tokio disabled to avoid SIGSEGV)`);
+          };
         }
       }
       // git*Async: Rust tokio async functions — type-safe stubs to prevent SIGSEGV.
@@ -362,15 +380,17 @@ Module._load = function (request, parent, isMain) {
     }
     // --- JS networkFetch* implementation (bionic: tokio networkFetch* are no-op'd) ---
     // B7 が QXe() から直接呼ばれる MCP 専用パスでクラッシュするため JS で代替。
-    // networkFetchStreamStart → { requestId, response: Promise<{handle,url,status,statusText,headers}> }
+    // networkFetchStreamStart(requestId, req) → Promise<{handle,url,status,statusText,headers}>
+    //   （2026-07-12修正: 実際のCLI本体は requestId を第1引数、req を第2引数として渡し、
+    //     戻り値を直接thenableとして扱う。旧実装は1引数・{requestId,response}のラップ返却で
+    //     この規約と不一致だったため s.then is not a function / Failed to parse URL from undefined
+    //     エラーの原因になっていた。詳細は docs/KNOWN-BUGS.md AGENT-001参照）
     // networkFetchStreamRead   → Promise<{ done, body?: Uint8Array }>
     // networkFetchStreamClose  → void
     // networkFetchRequestCancel → void
     const _nfMap = new Map();
-    let _nfIdSeq = 3e6;
 
-    result.networkFetchStreamStart = function(req) {
-      const requestId = 'nf-' + (++_nfIdSeq);
+    result.networkFetchStreamStart = function(requestId, req) {
       const abortCtrl = new AbortController();
       const entry = { abort: () => abortCtrl.abort(), reader: null };
       _nfMap.set(requestId, entry);
@@ -421,7 +441,7 @@ Module._load = function (request, parent, isMain) {
         return { handle, url: res.url, status: res.status, statusText: res.statusText, headers: respHeaders };
       })();
 
-      return { requestId, response };
+      return response;
     };
 
     result.networkFetchStreamRead = function(handle) {
