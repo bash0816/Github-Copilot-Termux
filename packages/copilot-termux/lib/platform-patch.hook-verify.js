@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const Module = require('module');
 const { execFileSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
@@ -52,6 +53,7 @@ function cleanup() {
   }
 }
 
+async function main() {
 try {
   // 1. テスト用ディレクトリ構造を作成（ESM: package.json に "type":"module" 必須）
   fs.mkdirSync(versionDir, { recursive: true });
@@ -271,6 +273,15 @@ console.log('[FIXTURE] WEr() =', WEr());
   cleanup();
 }
 
+// 11. networkFetch* JS実装の呼び出し規約回帰テスト（AGENT-001、非同期）
+try {
+  await runNetworkFetchRegressionTests();
+} catch (e) {
+  console.error('[Error] networkFetch regression tests threw:', e.message);
+  console.error(e.stack);
+  failCount++;
+}
+
 // 結果レポート
 console.log('\n' + '='.repeat(60));
 console.log(`Test Results: ${passCount} PASS, ${failCount} FAIL`);
@@ -285,4 +296,230 @@ if (failCount > 0) {
 } else {
   console.log('\nAll tests PASSED.');
   process.exit(0);
+}
+}
+
+main();
+
+// ============================================================
+// networkFetch* JS実装の呼び出し規約回帰テスト（AGENT-001）
+//
+// platform-patch.js の Module._load フックが実際に発火する経路
+// （origLoad → runtime.node 判定 → bionic上書き）を通してテストするため、
+// platform-patch.js を再requireする前に Module._load を差し替え、
+// "runtime.node" というrequestに対してのみ偽のNAPI exportsを返す。
+// それ以外のrequestは元のModule._load（同期テストで既にpatch済みのもの）
+// にそのまま委譲する。
+// ============================================================
+async function runNetworkFetchRegressionTests() {
+  console.log('\n[Test] networkFetch* JS implementation calling convention (AGENT-001 regression, async)');
+
+  const platformPatchCacheKey = require.resolve(platformPatchPath);
+  const originalModuleLoad = Module._load;
+  const savedGlibcEnv = process.env.COPILOT_TERMUX_GLIBC_MODE;
+  const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+  const fetchCallLog = [];
+
+  // 偽のNAPI (runtime.node) exports。ダミー関数を含み、bionic上書きロジックが
+  // 参照しうる代表的なプロパティも含める。networkFetchStreamStart等はこの後
+  // platform-patch.js側で無条件に実実装で上書きされるため、ここではダミーでよい。
+  function fakeRuntimeNodeExports() {
+    return {
+      networkFetchNextRequestId: () => undefined,
+      networkFetchStreamStart: () => undefined,
+      networkFetchStreamRead: () => undefined,
+      networkFetchStreamClose: () => undefined,
+      networkFetchRequestCancel: () => undefined,
+      networkFetchResetClients: () => undefined,
+      networkFetchGetExtraCaPems: () => undefined,
+      agentsResolveToolAliases: () => [],
+      authGetCopilotApiUrl: () => null,
+      capiClientPrepareRequestHeaders: () => ({ headers: [] }),
+      modelsFilterToPicker: () => [],
+      capiClientListModels: () => undefined,
+      registerLogSink: () => undefined,
+      sessionSqliteOpen: () => 1,
+      sessionSqliteQuery: () => ({ rows: '[]' }),
+      sessionSqliteRun: () => ({ rowsAffected: 0, lastInsertRowid: null }),
+      sessionSqliteFileExists: () => false,
+      capiClientRetrieveAvailableModels: () => ({}),
+      mcpClientConnectStreamableHttpWithHandlersAndOnclose: () => ({}),
+    };
+  }
+
+  // globalThis.fetch のモック。呼び出しごとに url/options を fetchCallLog に記録し、
+  // handler(url, options) が返す { response } の response を解決値として返す。
+  function installMockFetch(handler) {
+    const fetchFn = async (url, options) => {
+      fetchCallLog.push({ url, options });
+      const { response } = handler(url, options);
+      return response;
+    };
+    Object.defineProperty(globalThis, 'fetch', {
+      value: fetchFn,
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  // モックResponse相当（.ok/.status/.statusText/.url/.headers.entries()/.body.getReader()）を生成。
+  // reader は cancel() 呼び出しをスパイ記録する。
+  function makeMockResponse(chunks, { url = 'https://example.test/resolved', status = 200, statusText = 'OK', headers = [] } = {}) {
+    let idx = 0;
+    const reader = {
+      cancelCalled: false,
+      cancel() { this.cancelCalled = true; return Promise.resolve(); },
+      async read() {
+        if (idx < chunks.length) return { done: false, value: chunks[idx++] };
+        return { done: true, value: undefined };
+      },
+    };
+    const response = {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText,
+      url,
+      headers: new Map(headers),
+      body: { getReader: () => reader },
+    };
+    return { response, reader };
+  }
+
+  function restoreAll() {
+    Module._load = originalModuleLoad;
+    if (savedGlibcEnv === undefined) delete process.env.COPILOT_TERMUX_GLIBC_MODE;
+    else process.env.COPILOT_TERMUX_GLIBC_MODE = savedGlibcEnv;
+    if (fetchDescriptor) {
+      Object.defineProperty(globalThis, 'fetch', fetchDescriptor);
+    } else {
+      delete globalThis.fetch;
+    }
+    delete require.cache[platformPatchCacheKey];
+  }
+
+  try {
+    // bionic相当: COPILOT_TERMUX_GLIBC_MODE 未設定
+    delete process.env.COPILOT_TERMUX_GLIBC_MODE;
+
+    // platform-patch.js を再requireする前に Module._load を差し替える。
+    delete require.cache[platformPatchCacheKey];
+    Module._load = function (request, parent, isMain) {
+      if (typeof request === 'string' && path.basename(request) === 'runtime.node') {
+        return fakeRuntimeNodeExports();
+      }
+      return originalModuleLoad.call(this, request, parent, isMain);
+    };
+
+    // platform-patch.js を再require。これにより platform-patch.js 内部の
+    // `const origLoad = Module._load.bind(Module);` が上で差し替えたフェイクローダーを捕捉する。
+    require(platformPatchPath);
+
+    // runtime.node をロードさせ、origLoad → runtime.node判定 → bionic上書きの実ロジックを通す。
+    const patchedRuntime = require('runtime.node');
+
+    assert(typeof patchedRuntime.networkFetchNextRequestId === 'function',
+      'networkFetch fixture: bionic-patched runtime.node exports networkFetchNextRequestId as function');
+    assert(typeof patchedRuntime.networkFetchStreamStart === 'function',
+      'networkFetch fixture: bionic-patched runtime.node exports networkFetchStreamStart as function');
+
+    // --- 1. networkFetchNextRequestId: no-op化されず一意なIDを連続生成する ---
+    const id1 = patchedRuntime.networkFetchNextRequestId();
+    const id2 = patchedRuntime.networkFetchNextRequestId();
+    assert(id1 !== undefined && id2 !== undefined,
+      'networkFetchNextRequestId() returns defined values (TOKIO_PATTERN no-op has been overridden)');
+    assert(id1 !== id2,
+      'networkFetchNextRequestId() returns distinct IDs on consecutive calls');
+
+    // --- 2. networkFetchStreamStart(id, req) が thenable を返し、handle===id で解決する ---
+    installMockFetch((url) => makeMockResponse([Buffer.from('hello')], { url }));
+    const req1 = { url: 'https://example.test/a', method: 'GET', headers: {} };
+    const started1 = patchedRuntime.networkFetchStreamStart(id1, req1);
+    assert(started1 && typeof started1.then === 'function',
+      'networkFetchStreamStart(requestId, req) returns a thenable ' +
+      '(2-arg calling convention fix, AGENT-001: previously returned {requestId,response} wrapper)');
+    const resolved1 = await started1;
+    assert(resolved1 && resolved1.handle === id1,
+      'networkFetchStreamStart resolved value.handle equals the passed-in requestId');
+    const call1 = fetchCallLog[fetchCallLog.length - 1];
+    assert(call1 && call1.url === req1.url,
+      'networkFetchStreamStart passes req.url through to globalThis.fetch');
+
+    // --- 3. close 専用テスト ---
+    let closeReader = null;
+    installMockFetch((url) => {
+      const r = makeMockResponse([Buffer.from('chunk')], { url });
+      closeReader = r.reader;
+      return r;
+    });
+    const idClose = patchedRuntime.networkFetchNextRequestId();
+    const reqClose = { url: 'https://example.test/close', method: 'GET', headers: {} };
+    const startedClose = patchedRuntime.networkFetchStreamStart(idClose, reqClose);
+    await startedClose;
+    const closeCall = fetchCallLog[fetchCallLog.length - 1];
+    patchedRuntime.networkFetchStreamClose(idClose);
+    assert(closeReader && closeReader.cancelCalled === true,
+      'networkFetchStreamClose calls the underlying reader.cancel()');
+    assert(!!(closeCall && closeCall.options && closeCall.options.signal && closeCall.options.signal.aborted === true),
+      'networkFetchStreamClose aborts the AbortSignal passed to fetch');
+    const readAfterClose = await patchedRuntime.networkFetchStreamRead(idClose);
+    assert(readAfterClose && readAfterClose.done === true,
+      'networkFetchStreamRead after StreamClose returns {done:true}');
+
+    // --- 4. cancel 専用テスト ---
+    installMockFetch((url) => makeMockResponse([Buffer.from('chunk')], { url }));
+    const idCancel = patchedRuntime.networkFetchNextRequestId();
+    const reqCancel = { url: 'https://example.test/cancel', method: 'GET', headers: {} };
+    const startedCancel = patchedRuntime.networkFetchStreamStart(idCancel, reqCancel);
+    await startedCancel;
+    const cancelCall = fetchCallLog[fetchCallLog.length - 1];
+    patchedRuntime.networkFetchRequestCancel(idCancel);
+    assert(!!(cancelCall && cancelCall.options && cancelCall.options.signal && cancelCall.options.signal.aborted === true),
+      'networkFetchRequestCancel aborts the AbortSignal passed to fetch');
+    const readAfterCancel = await patchedRuntime.networkFetchStreamRead(idCancel);
+    assert(readAfterCancel && readAfterCancel.done === true,
+      'networkFetchStreamRead after RequestCancel returns {done:true}');
+
+    // --- 5. 並行テスト: 片方をキャンセルしてももう片方は正常に読み進められる（IDキー衝突なし）---
+    const reqA = { url: 'https://example.test/concurrent-a', method: 'GET', headers: {} };
+    const reqB = { url: 'https://example.test/concurrent-b', method: 'GET', headers: {} };
+    installMockFetch((url) => {
+      if (url === reqA.url) return makeMockResponse([Buffer.from('A-chunk')], { url });
+      if (url === reqB.url) return makeMockResponse([Buffer.from('B-chunk')], { url });
+      return makeMockResponse([], { url });
+    });
+    const idA = patchedRuntime.networkFetchNextRequestId();
+    const idB = patchedRuntime.networkFetchNextRequestId();
+    assert(idA !== idB, 'concurrent test: two concurrent streams get distinct requestIds');
+    const startedA = patchedRuntime.networkFetchStreamStart(idA, reqA);
+    const startedB = patchedRuntime.networkFetchStreamStart(idB, reqB);
+    const [resolvedA, resolvedB] = await Promise.all([startedA, startedB]);
+    assert(resolvedA.handle === idA && resolvedB.handle === idB,
+      'concurrent test: each stream resolves with its own matching handle');
+    patchedRuntime.networkFetchRequestCancel(idA);
+    const readB = await patchedRuntime.networkFetchStreamRead(idB);
+    assert(!!(readB && readB.done === false && readB.body !== undefined),
+      'concurrent test: cancelling requestId A does not affect requestId B stream reading (no key collision)');
+
+    // --- 6. MCP-BIONIC-001: 対象2関数がbionicモードで同期Errorをthrowすることを確認 ---
+    let mcpBionic1Threw = false;
+    try {
+      patchedRuntime.capiClientRetrieveAvailableModels();
+    } catch (e) {
+      mcpBionic1Threw = e instanceof Error && e.message.includes('capiClientRetrieveAvailableModels');
+    }
+    assert(mcpBionic1Threw,
+      'capiClientRetrieveAvailableModels throws a synchronous Error containing its own name (MCP-BIONIC-001)');
+
+    let mcpBionic2Threw = false;
+    try {
+      patchedRuntime.mcpClientConnectStreamableHttpWithHandlersAndOnclose();
+    } catch (e) {
+      mcpBionic2Threw = e instanceof Error && e.message.includes('mcpClientConnectStreamableHttpWithHandlersAndOnclose');
+    }
+    assert(mcpBionic2Threw,
+      'mcpClientConnectStreamableHttpWithHandlersAndOnclose throws a synchronous Error containing its own name (MCP-BIONIC-001)');
+
+  } finally {
+    restoreAll();
+  }
 }
