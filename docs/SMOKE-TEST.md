@@ -12,10 +12,10 @@ GitHub Copilot の権限は Chat とエージェント（Agent）の 2 種類あ
 
 | プラン | Chat（`copilot` TUI） | エージェント（`copilot -p`） |
 |--------|----------------------|---------------------------|
-| **Free** | ✅ 動作（`policy.state=enabled` モデルが picker に表示される） | ❌ 権限なし |
+| **Free** | ✅ 動作（`policy.state=enabled` モデルが picker に表示される） | ✅ 動作（2026-07-16実機確認） |
 | **Enterprise** | ✅ 動作（モデル選択可） | ✅ 動作 |
 
-- **`copilot -p`（エージェントモード）** は Enterprise のみ。Free で実行すると権限エラーになる
+- **`copilot -p`（エージェントモード）**: 以前の記載は「Enterprise のみで Free は権限エラー」としていたが、2026-07-16の実機確認により Free アカウントでも正常応答することが判明した。
 - Free の Chat は全モデル `model_picker_enabled=false` だが、`policy.state=enabled` かつ denylist 外のモデルが picker に表示される（platform-patch.js フォールバック）
 - Enterprise の Chat はモデル選択あり（`model_picker_enabled: true` のモデルが表示される）
 
@@ -71,12 +71,12 @@ copilot -p "1+1は"
 ```
 
 **期待動作**:
-- エージェント権限がないため、エラーが出て終了する
-- エラーメッセージに権限不足の旨が含まれる
+- エージェントが起動し、質問に対して回答が返ってくる（2026-07-16実機確認: Free アカウントでも正常応答する）
 
 **確認ポイント**:
+- ✅ 応答が返ってくること
+- ❌ `CAPIError: 400` が出ないこと
 - ❌ クラッシュ（SIGSEGV 等）しないこと
-- ❌ 無限ループしないこと
 
 ---
 
@@ -329,7 +329,7 @@ GITHUB_COPILOT_VERBOSITY=debug copilot -p "テスト" 2>&1 | head -100
 | テストケース | 合格条件 |
 |-------------|---------|
 | TC-1 Free Chat | 起動・応答成功。400 エラーなし |
-| TC-2 Free `-p` | 権限エラーが出て正常終了 |
+| TC-2 Free `-p` | 応答成功。エラーなし（2026-07-16: 実機確認により Free でも正常応答を確認） |
 | TC-3 Enterprise Chat | モデル選択表示。応答成功 |
 | TC-4 Enterprise `-p` | 応答成功 |
 | TC-5 Enterprise→Free 切替 | 切替後 TC-1 相当の動作 |
