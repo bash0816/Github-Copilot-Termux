@@ -94,23 +94,17 @@ jobs:
             echo "RELEASES.md already has ${VER} entry"
           else
             sed -i 's/ 🚀 Latest \/ 最新版/ \/ 旧版/' RELEASES.md
-            entry=$(cat <<RELNOTES_EOF
-## ${VER} — ${date_str} 🚀 Latest / 最新版
-
-${notes}
-
-### Install
-
-\`\`\`sh
-npm install -g @bash0816/copilot-termux@latest
-copilot-termux setup
-copilot --version
-\`\`\`
-
----
-
-RELNOTES_EOF
-)
+            entry=$(
+              printf '## %s — %s 🚀 Latest / 最新版\n\n' "$VER" "$date_str"
+              printf '%s\n\n' "$notes"
+              printf '### Install\n\n'
+              printf '```sh\n'
+              printf 'npm install -g @bash0816/copilot-termux@latest\n'
+              printf 'copilot-termux setup\n'
+              printf 'copilot --version\n'
+              printf '```\n\n'
+              printf -- '---\n\n'
+            )
             printf '%s\n' "$entry" > /tmp/new_entry.md
             if [ -f RELEASES.md ]; then
               cat /tmp/new_entry.md RELEASES.md > /tmp/releases_new.md
