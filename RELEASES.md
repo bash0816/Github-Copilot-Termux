@@ -1,4 +1,27 @@
-## 1.0.70 — 2026-07-12 🚀 Latest / 最新版
+## 1.0.71 — 2026-07-17 🚀 Latest / 最新版
+
+upstream `@github/copilot@1.0.71` 追従。
+
+**変更内容**
+
+- upstream の内部改善に追従。今回のバージョンでは Termux 向けの追加修正はありません
+- Free / Enterprise 両アカウントで TUI・`-p` モードの動作を実機確認済み
+
+**既知の問題**
+
+- 前バージョンからの既知の問題は引き続き未確定。詳細は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
+
+### Install
+
+```sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+```
+
+---
+
+## 1.0.70 — 2026-07-12 / 旧版
 
 upstream `@github/copilot@1.0.70` 追従。
 
