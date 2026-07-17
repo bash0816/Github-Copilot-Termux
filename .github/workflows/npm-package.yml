@@ -63,6 +63,10 @@ jobs:
     environment: npm-publish
     permissions:
       contents: write
+      pull-requests: write
+    concurrency:
+      group: copilot-manifest-write
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
@@ -100,16 +104,52 @@ jobs:
             exit 1
           fi
           cd packages/copilot-termux
-          npm publish --tag candidate --access public
+          already_published=$(npm view "@bash0816/copilot-termux@${VERSION}" version 2>/dev/null || echo "")
+          if [ -z "$already_published" ]; then
+            npm publish --tag candidate --access public
+          else
+            already_candidate_tag=$(npm view "@bash0816/copilot-termux" dist-tags.candidate 2>/dev/null || echo "")
+            if [ "$already_candidate_tag" = "$VERSION" ]; then
+              echo "Already published and candidate-tagged, skipping (idempotent re-run)"
+            else
+              echo "ERROR: version $VERSION is published but candidate tag is '$already_candidate_tag' (expected $VERSION). Manual recovery required." >&2
+              exit 1
+            fi
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Update manifest (publish)
         if: ${{ fromJSON(inputs.publish) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
+          branch="automation/copilot-publish-${VERSION}"
+
+          own_pr=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --head "$branch" --state open \
+            --json number,headRepositoryOwner --jq '[.[] | select(.headRepositoryOwner.login == "bash0816")] | .[0].number // empty')
+          if [ -z "$own_pr" ]; then
+            other_count=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --state open \
+              --json title,headRepositoryOwner \
+              --jq '[.[] | select(.headRepositoryOwner.login == "bash0816" and (.title | startswith("[copilot-manifest]")))] | length')
+            if [ "$other_count" -gt 0 ]; then
+              echo "ERROR: Another manifest-write PR is open. Resolve it before proceeding." >&2
+              exit 1
+            fi
+          fi
+
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$own_pr" ]; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -B "$branch" origin/main
+          fi
+
           MANIFEST_ENV="$MANIFEST" VERSION_ENV="$VERSION" node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
@@ -118,14 +158,66 @@ jobs:
             m.last_updated = new Date().toISOString().slice(0, 10);
             fs.writeFileSync(process.env.MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
           "
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$MANIFEST"
-          git diff --staged --quiet || git commit -m "chore: update manifest after candidate publish"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update manifest after candidate publish"
+            git push --force-with-lease origin "$branch"
+          fi
+
+          if [ -n "$own_pr" ]; then
+            pr_number="$own_pr"
+          else
+            pr_url=$(gh pr create --base main --head "$branch" --title "[copilot-manifest] Update manifest after candidate publish ${VERSION}" --body "Automated manifest update after npm candidate publish.")
+            pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$')
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+        id: manifest_publish_pr
+
+      - name: Admin merge manifest PR (publish)
+        if: ${{ fromJSON(inputs.publish) }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
+          if ! gh api user >/dev/null 2>&1; then
+            echo "ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated" >&2
+            exit 1
+          fi
+          pr_number="${{ steps.manifest_publish_pr.outputs.pr_number }}"
+          branch="${{ steps.manifest_publish_pr.outputs.branch }}"
+          git fetch origin main "$branch"
+          pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+            echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
+            exit 1
+          fi
+          gh pr merge "$pr_number" --admin --squash --delete-branch
+
+      - name: Check retag already applied
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        id: retag_check
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
+          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
+          expected_candidate=$(node -p "require('./$MANIFEST').latest_candidate_version")
+          current_latest=$(npm view "$PACKAGE_NAME" dist-tags.latest 2>/dev/null || echo "")
+          current_candidate=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
+          if [ "$current_latest" = "$expected_candidate" ] && [ "$current_candidate" = "${{ inputs.previous_audited_version }}" ]; then
+            echo "already_retagged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_retagged=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Retag latest
-        if: ${{ fromJSON(inputs.retag_latest) }}
+        if: ${{ fromJSON(inputs.retag_latest) && steps.retag_check.outputs.already_retagged != 'true' }}
         run: node scripts/retag-latest-dist-tags.js
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -133,14 +225,39 @@ jobs:
 
       - name: Update manifest (retag)
         if: ${{ fromJSON(inputs.retag_latest) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
+          branch="automation/copilot-retag-${VERSION}"
+
+          own_pr=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --head "$branch" --state open \
+            --json number,headRepositoryOwner --jq '[.[] | select(.headRepositoryOwner.login == "bash0816")] | .[0].number // empty')
+          if [ -z "$own_pr" ]; then
+            other_count=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --state open \
+              --json title,headRepositoryOwner \
+              --jq '[.[] | select(.headRepositoryOwner.login == "bash0816" and (.title | startswith("[copilot-manifest]")))] | length')
+            if [ "$other_count" -gt 0 ]; then
+              echo "ERROR: Another manifest-write PR is open. Resolve it before proceeding." >&2
+              exit 1
+            fi
+          fi
+
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
           PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
           CANDIDATE=$(node -p "require('./$MANIFEST').latest_candidate_version")
-          # retag-latest-dist-tags.js が candidate タグを旧 latest に退避した後の値を registry から取得する
-          # (旧 latest が存在しない/退避されなかった場合は空のまま維持し manifest を壊さない)
           NEW_CANDIDATE=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "$own_pr" ]; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -B "$branch" origin/main
+          fi
+
           MANIFEST_ENV="$MANIFEST" PREVIOUS_AUDITED_VERSION_ENV="${{ inputs.previous_audited_version }}" CANDIDATE_ENV="$CANDIDATE" NEW_CANDIDATE_ENV="$NEW_CANDIDATE" node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
@@ -154,8 +271,44 @@ jobs:
             m.last_updated = new Date().toISOString().slice(0, 10);
             fs.writeFileSync(process.env.MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
           "
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$MANIFEST"
-          git diff --staged --quiet || git commit -m "chore: update manifest after retag to latest"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update manifest after retag to latest"
+            git push --force-with-lease origin "$branch"
+          fi
+
+          if [ -n "$own_pr" ]; then
+            pr_number="$own_pr"
+          else
+            pr_url=$(gh pr create --base main --head "$branch" --title "[copilot-manifest] Update manifest after retag to latest ${VERSION}" --body "Automated manifest update after npm latest retag.")
+            pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$')
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+        id: manifest_retag_pr
+
+      - name: Admin merge manifest PR (retag)
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
+          if ! gh api user >/dev/null 2>&1; then
+            echo "ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated" >&2
+            exit 1
+          fi
+          pr_number="${{ steps.manifest_retag_pr.outputs.pr_number }}"
+          branch="${{ steps.manifest_retag_pr.outputs.branch }}"
+          git fetch origin main "$branch"
+          pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+            echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
+            exit 1
+          fi
+          gh pr merge "$pr_number" --admin --squash --delete-branch

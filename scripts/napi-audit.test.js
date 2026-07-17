@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { extractCandidates, classifyCandidates } = require('./napi-audit.js');
+const { extractCandidates, classifyCandidates, escapeRegExp, patchTokioPattern, maybeAutoPatch } = require('./napi-audit.js');
 
 const IDENTIFIER_REGEX = /^[a-zA-Z_$][a-zA-Z0-9_$]{6,}$/;
 
@@ -285,6 +285,136 @@ test('extractCandidates - parity with real binary', async (t) => {
 
     for (const candidate of newCandidates) {
       assert.ok(IDENTIFIER_REGEX.test(candidate), `Candidate '${candidate}' should match identifier regex`);
+    }
+  });
+});
+
+test('classifyCandidates - newStreamRisk classification', async (t) => {
+  await t.test('should classify Stream-containing candidates as newStreamRisk', () => {
+    const candidates = ['modelHttpStreamRetryBackoff', 'unknownExportXyz'];
+    const config = {
+      tokio_noop_prefixes: [],
+      behavioral_stubs: [],
+      git_async_stubs: [],
+      stream_pipeline_risk: [],
+      pending_git_async_stubs: [],
+    };
+
+    const result = classifyCandidates(candidates, config);
+
+    assert.ok(result.newStreamRisk.includes('modelHttpStreamRetryBackoff'), 'Should classify Stream-containing candidate as newStreamRisk');
+    assert.equal(result.newTokio.length, 0, 'Should not classify Stream candidate as newTokio');
+    assert.equal(result.newUnknown.length, 1, 'Should have 1 newUnknown (the non-Stream candidate)');
+  });
+});
+
+test('escapeRegExp - special character handling', async (t) => {
+  await t.test('should escape dollar sign correctly', () => {
+    const input = 'modelHttp$Retry';
+    const result = escapeRegExp(input);
+    assert.equal(result, 'modelHttp\\$Retry', 'Should escape $ to \\$');
+  });
+
+  await t.test('should escape regex special characters including caret', () => {
+    const input = 'abc^def';
+    const result = escapeRegExp(input);
+    assert.equal(result, 'abc\\^def', 'Should escape ^ to \\^');
+  });
+});
+
+test('patchTokioPattern - regex matching with escaped characters', async (t) => {
+  await t.test('should generate regex that matches escaped dollar sign candidates', () => {
+    const tmpDir = path.join(__dirname, '.test-patch-tmp');
+    const platformPatchPath = path.join(tmpDir, 'platform-patch.js');
+
+    // Create temp directory and test file
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+    const original = `// Test file
+      const TOKIO_PATTERN = /^(modelHttp|prefixOne)/;
+// Other code
+`;
+
+    fs.writeFileSync(platformPatchPath, original);
+
+    try {
+      const additions = ['modelHttp$Retry'];
+      const result = patchTokioPattern(platformPatchPath, additions);
+
+      assert.equal(result, true, 'Should return true (file was updated)');
+
+      const updated = fs.readFileSync(platformPatchPath, 'utf8');
+      // The pattern should now contain the escaped version
+      assert.ok(updated.includes('\\$'), 'Updated pattern should contain escaped $');
+
+      // Verify the regex actually matches the candidate
+      const lineMatch = updated.match(/^(\s*const TOKIO_PATTERN = \/\^\()([^)]*)(\)\/;)\s*$/m);
+      assert.ok(lineMatch, 'Should find TOKIO_PATTERN line');
+      const pattern = lineMatch[2];
+      const testRegex = new RegExp(`^(${pattern})`);
+      assert.ok(testRegex.test('modelHttp$Retry'), 'Generated regex should match the escaped candidate');
+    } finally {
+      if (fs.existsSync(platformPatchPath)) fs.unlinkSync(platformPatchPath);
+      if (fs.existsSync(tmpDir)) fs.rmdirSync(tmpDir);
+    }
+  });
+});
+
+test('maybeAutoPatch - tokioPatchOk flag', async (t) => {
+  await t.test('should return tokioPatchOk=false when TOKIO_PATTERN line not found', () => {
+    const tmpDir = path.join(__dirname, '.test-patch-notfound-tmp');
+    const rootDir = tmpDir;
+
+    // Create minimal directory structure
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const pkgDir = path.join(rootDir, 'packages', 'copilot-termux', 'lib');
+    const configDir = path.join(rootDir, 'config');
+
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true });
+
+    // Write invalid platform-patch.js (no TOKIO_PATTERN line)
+    const platformPatchPath = path.join(pkgDir, 'platform-patch.js');
+    fs.writeFileSync(platformPatchPath, '// No TOKIO_PATTERN here\n');
+
+    // Write valid config
+    const configPath = path.join(configDir, 'napi-known-exports.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      tokio_noop_prefixes: [],
+      behavioral_stubs: [],
+      git_async_stubs: [],
+      stream_pipeline_risk: [],
+      pending_git_async_stubs: [],
+    }, null, 2) + '\n');
+
+    try {
+      const updates = {
+        newTokio: ['someNewTokioPrefix'],
+        newPendingGitAsync: [],
+        newStreamRisk: [],
+        newUnknown: [],
+      };
+
+      const result = maybeAutoPatch(rootDir, updates);
+
+      assert.ok(result.tokioPatchOk === false, 'Should set tokioPatchOk=false when TOKIO_PATTERN patch fails');
+      assert.ok(typeof result.patchApplied === 'boolean', 'Should have patchApplied flag');
+    } finally {
+      // Cleanup
+      const cleanup = (dir) => {
+        if (fs.existsSync(dir)) {
+          fs.readdirSync(dir).forEach((file) => {
+            const fullPath = path.join(dir, file);
+            if (fs.statSync(fullPath).isDirectory()) {
+              cleanup(fullPath);
+            } else {
+              fs.unlinkSync(fullPath);
+            }
+          });
+          fs.rmdirSync(dir);
+        }
+      };
+      cleanup(tmpDir);
     }
   });
 });

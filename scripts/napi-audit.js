@@ -15,6 +15,10 @@ function uniqueSorted(values) {
   return Array.from(new Set(values)).sort();
 }
 
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function loadKnownSet(config) {
   const known = new Set();
   for (const value of config.tokio_noop_prefixes || []) known.add(value);
@@ -36,11 +40,16 @@ function classifyCandidates(candidates, config) {
   const tokioPrefixes = Array.isArray(config.tokio_noop_prefixes) ? config.tokio_noop_prefixes : [];
   const newTokio = [];
   const newPendingGitAsync = [];
+  const newStreamRisk = [];
   const newUnknown = [];
 
   for (const candidate of candidates) {
     if (known.has(candidate)) continue;
     if (pending.has(candidate)) continue;
+    if (/Stream/.test(candidate)) {
+      newStreamRisk.push(candidate);
+      continue;
+    }
     if (tokioPrefixes.some((prefix) => candidate.startsWith(prefix))) {
       newTokio.push(candidate);
       continue;
@@ -57,6 +66,7 @@ function classifyCandidates(candidates, config) {
   return {
     newTokio: uniqueSorted(newTokio),
     newPendingGitAsync: uniqueSorted(newPendingGitAsync),
+    newStreamRisk: uniqueSorted(newStreamRisk),
     newUnknown: uniqueSorted(newUnknown),
   };
 }
@@ -103,7 +113,8 @@ function patchTokioPattern(platformPatchPath, additions) {
     return false;
   }
   const currentPrefixes = lineMatch[2].split('|').filter(Boolean);
-  const merged = uniqueSorted([...currentPrefixes, ...additions]);
+  const escapedAdditions = additions.map(escapeRegExp);
+  const merged = uniqueSorted([...currentPrefixes, ...escapedAdditions]);
   const updatedLine = `${lineMatch[1]}${merged.join('|')}${lineMatch[3]}`;
   const updated = original.replace(lineMatch[0], updatedLine);
   if (updated !== original) fs.writeFileSync(platformPatchPath, updated);
@@ -157,7 +168,9 @@ function maybeAutoPatch(rootDir, updates) {
   };
   const configPatched = updateKnownExportsConfig(configPath, configUpdates);
 
-  return tokioPatched || pendingGitPatched || configPatched;
+  const tokioPatchOk = updates.newTokio.length === 0 || tokioPatched;
+
+  return { patchApplied: tokioPatched || pendingGitPatched || configPatched, tokioPatchOk };
 }
 
 function main() {
@@ -176,21 +189,26 @@ function main() {
   const config = readJson(configPath);
   const candidates = extractCandidates(runtimePath);
   const updates = classifyCandidates(candidates, config);
-  const patchApplied = autoPatch ? maybeAutoPatch(rootDir, updates) : false;
+  const patchResult = autoPatch ? maybeAutoPatch(rootDir, updates) : { patchApplied: false, tokioPatchOk: updates.newTokio.length === 0 };
+  const patchApplied = patchResult.patchApplied;
+  const tokioPatchOk = patchResult.tokioPatchOk;
 
   const summary = {
     candidateCount: candidates.length,
-    knownCount: candidates.length - updates.newTokio.length - updates.newPendingGitAsync.length - updates.newUnknown.length,
+    knownCount: candidates.length - updates.newTokio.length - updates.newPendingGitAsync.length - updates.newStreamRisk.length - updates.newUnknown.length,
     newTokioCount: updates.newTokio.length,
     newPendingGitAsyncCount: updates.newPendingGitAsync.length,
+    newStreamRiskCount: updates.newStreamRisk.length,
     newUnknownCount: updates.newUnknown.length,
   };
 
   const output = {
     newTokio: updates.newTokio,
     newPendingGitAsync: updates.newPendingGitAsync,
+    newStreamRisk: updates.newStreamRisk,
     newUnknown: updates.newUnknown,
     patchApplied,
+    tokioPatchOk,
     version,
     summary,
   };
@@ -205,6 +223,7 @@ module.exports = {
   readJson,
   writeJson,
   uniqueSorted,
+  escapeRegExp,
   loadKnownSet,
   loadPendingSet,
   patchTokioPattern,

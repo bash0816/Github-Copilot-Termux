@@ -32,7 +32,7 @@
 
 1. `@github/copilot` の最新バージョンを npm registry から取得
 2. `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` と比較
-3. 新バージョンが検知されたとき、以下を全て更新してコミット + push（PAT token 使用）:
+3. 新バージョンが検知されたとき、以下のマニフェスト・ファイルを更新してブランチを作成し、PR化して即座にadmin bypass mergeを実行（条件満たす場合）:
    - `packages/copilot-termux/config/copilot-termux-release-manifest.json`:
      - `copilot_version`: 新バージョン
      - `latest_candidate_version`: **`null` のまま保持**（publish 成功後のみ設定される）
@@ -41,7 +41,8 @@
    - `packages/copilot-termux/config/manifest.json`: `copilot.version` と `copilot.integrity`
      - `copilot.integrity` は `npm view @github/copilot-linuxmusl-arm64@{version} dist.integrity` で取得
      - **取得失敗時は ワークフロー全体が exit 1 で失敗** → GitHub Actions issue が自動起票される
-   - 変更をコミット + push の後、`npm-package.yml` を dispatch（`publish=false`, `retag_latest=false`）
+   - **PR作成**後、napi-audit が追加のレビュー必要判定（`newUnknown`・`newPendingGitAsync`・`newStreamRisk` が存在）した場合は PR をオープンなままで手動レビュー待ち、不要な場合は admin bypass で即座にマージ
+   - merge 後、`npm-package.yml` を dispatch（`publish=false`, `retag_latest=false`）
 
 **ログ確認**:
 
@@ -199,6 +200,13 @@ gh run list --repo bash0816/Github-Copilot-Termux --workflow npm-package.yml -L 
 gh run view <RUN_ID> --log --repo bash0816/Github-Copilot-Termux
 ```
 
+**ワークフロー実行内容**:
+
+- npm registry に candidate タグで publish
+- manifest update PR を作成・admin bypass mergeで自動マージ
+  - `latest_candidate_version`: 新バージョン（publish済み）
+  - `candidate_state`: `"published"`
+
 **npm registry で確認**:
 
 ```bash
@@ -272,9 +280,10 @@ npm dist-tags ls @bash0816/copilot-termux
 # candidate: 1.0.63    ← 旧 latest（previous_audited_version）に退避
 ```
 
-**manifest 自動更新**:
+**ワークフロー実行内容**:
 
-- `npm-package.yml` の retag job が自動で `packages/copilot-termux/config/copilot-termux-release-manifest.json` を更新してコミット・push する
+- npm dist-tag で candidate 版を latest に、旧 latest を candidate に退避
+- manifest update PR を作成・admin bypass mergeで自動マージ
   - `latest_audited_version`: 昇格した版（旧 `latest_candidate_version`）
   - `latest_candidate_version`: 退避後の registry `candidate` dist-tag（＝旧 `latest`）
   - `previous_stable_version`: `previous_audited_version` 入力値
@@ -287,6 +296,22 @@ npm dist-tags ls @bash0816/copilot-termux
 gh api repos/bash0816/Github-Copilot-Termux/contents/packages/copilot-termux/config/copilot-termux-release-manifest.json --jq '.content' | base64 -d | jq .latest_audited_version
 ```
 
+**retag が中間状態でエラーしたとき（中間状態復旧）**:
+
+retagステップが失敗し、`latest` タグは切り替わったが `candidate` タグ退避が未実施の場合：
+
+```bash
+# 1. 旧 latest バージョン（退避対象）を candidate に設定
+npm dist-tag add @bash0816/copilot-termux@<previous_audited_version> candidate
+
+# 2. ワークフローを再実行（同じ前提条件で）
+gh workflow run npm-package.yml \
+  --repo bash0816/Github-Copilot-Termux \
+  --field publish=false \
+  --field retag_latest=true \
+  --field previous_audited_version="<previous_audited_version>"
+```
+
 ---
 
 ## Step 7: GitHub Release 作成（手動）
@@ -294,31 +319,39 @@ gh api repos/bash0816/Github-Copilot-Termux/contents/packages/copilot-termux/con
 **前提条件**:
 
 - Step 6 の latest promote 完了
-- 修正内容が `RELEASES.md` に記載済み
 
-**注意事項**:
-
-`release-finalize.yml` のコマンドインジェクション脆弱性（`KNOWN-BUGS.md` CI-001 参照）は2026-07-05 commit `16839be` で修正済み（`env:` 経由化）。
-本ドキュメントの `--notes-file` を使う手順は依然として有効な安全な代替手段だが、`release-finalize.yml` 自体も安全に使えるようになった。
-
-**実行コマンド**:
+**実行コマンド（release-finalize.yml ワークフロー利用）**:
 
 ```bash
-# RELEASES.md から該当バージョンのセクションを抽出
-VERSION="1.0.63"
-grep -A 100 "^## ${VERSION}" RELEASES.md | grep -B 100 "^---" | head -n -1 > /tmp/release_notes.txt
-
-# GitHub Release 作成（--notes-file を使用）
-gh release create "v${VERSION}" \
+gh workflow run release-finalize.yml \
   --repo bash0816/Github-Copilot-Termux \
-  --title "v${VERSION}" \
-  --notes-file /tmp/release_notes.txt
+  --field version="1.0.63" \
+  --field release_notes="upstream @github/copilot@1.0.63 追従。"
 ```
 
-**確認**:
+**ワークフロー実行内容**:
+
+- リリース前提条件の検証
+  - `package.json` version が入力 version と一致
+  - manifest `latest_audited_version` が入力 version と一致
+  - manifest `candidate_state` が `"promoted"`
+  - npm registry に該当バージョンが published かつ `latest` dist-tag が該当版に設定
+- GitHub Release 作成（`v{version}` tag）
+- `RELEASES.md` をブランチに push した上で PR を作成・admin bypass mergeで自動マージ
+  - 新バージョンのエントリを先頭に追加
+  - 既存の前バージョンの `🚀 Latest / 最新版` マークを ` / 旧版` に変更
+
+**ワークフロー実行確認**:
 
 ```bash
+# workflow run の進行状況を確認
+gh run view <RUN_ID> --log --repo bash0816/Github-Copilot-Termux
+
+# Release が作成されたか確認
 gh release view v1.0.63 --repo bash0816/Github-Copilot-Termux
+
+# RELEASES.md が更新されたか確認
+gh api repos/bash0816/Github-Copilot-Termux/contents/RELEASES.md --jq '.content' | base64 -d | head -20
 ```
 
 ---
@@ -453,6 +486,41 @@ cat packages/copilot-termux/lib/platform-patch.js | grep -A 20 "responsesStreamD
 # bionic-compat.so が正しくロードされているか確認
 LD_PRELOAD=$(npm list -g @bash0816/copilot-termux --depth=0 | grep copilot-termux | awk '{print $NF}') LD_PRELOAD="${LD_PRELOAD}/lib/bionic-compat.so" ldd $(which node) | grep bionic
 ```
+
+---
+
+## GitHub Admin Bypass Merge の認証基盤（RELEASE_ADMIN_PAT）
+
+本リリースフロー（特に Step 1・Step 4・Step 6・Step 7 の自動マージ）では、main ブランチへの直接 push を避けるため、PR を作成してから admin bypass (`gh pr merge --admin`) で即座にマージしています。
+
+**RELEASE_ADMIN_PAT の役割**:
+
+- ワークフロー内から `gh pr merge --admin` を実行する際に使用する PAT（Personal Access Token）
+- GitHub の branch protection rule（`main` への PR 作成と merge 承認）をバイパス可能な権限を持つ
+- 既存の `GH_TOKEN: ${{ github.token }}` では PR 作成はできるが、admin bypass は権限不足で失敗するため、別途 repository secret として `RELEASE_ADMIN_PAT` を設定
+
+**設定方法**:
+
+```bash
+# 1. 個人の PAT を生成（GitHub Web UI 上で）
+# https://github.com/settings/tokens
+#    - Select scopes: repo, workflow
+#    - Note: "RELEASE_ADMIN_PAT for copilot-termux"
+
+# 2. GitHub-Copilot-Termux リポジトリに secret として登録
+# Settings → Secrets and variables → Actions → New repository secret
+#    - Name: RELEASE_ADMIN_PAT
+#    - Secret: [上記で生成した PAT]
+
+# コマンドライン経由の登録（gh cli 利用時）
+# gh secret set RELEASE_ADMIN_PAT -b "<PAT値>"
+```
+
+**トラブルシューティング**:
+
+- `ERROR: RELEASE_ADMIN_PAT secret is not set` → secret が未登録。上記「設定方法」で登録する
+- `ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated` → PAT が期限切れまたは権限不足。再生成する
+- admin bypass に失敗（`gh pr merge --admin` で permission error） → PAT 生成時の scopes に `repo`・`workflow` が含まれているか確認
 
 ---
 
