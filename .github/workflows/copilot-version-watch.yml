@@ -5,6 +5,10 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
 
+concurrency:
+  group: copilot-manifest-write
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -12,6 +16,7 @@ jobs:
       contents: write
       actions: write
       issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,8 +35,49 @@ jobs:
           else
             echo "No new version"
           fi
-      - name: Update manifest and package.json
+      - name: Check for existing manifest PR
         if: steps.check_version.outputs.new_version != ''
+        id: existing_pr_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="automation/copilot-watch-${{ steps.check_version.outputs.new_version }}"
+          own_pr=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --head "$branch" --state open \
+            --json number,headRepositoryOwner \
+            --jq '[.[] | select(.headRepositoryOwner.login == "bash0816")] | .[0].number // empty')
+          if [ -n "$own_pr" ]; then
+            echo "existing_own_pr=$own_pr" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            other_count=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --state open \
+              --json title,headRepositoryOwner \
+              --jq '[.[] | select(.headRepositoryOwner.login == "bash0816" and (.title | startswith("[copilot-manifest]")))] | length')
+            if [ "$other_count" -gt 0 ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Skipping new intake: another manifest-write PR is open (count=$other_count). Version ${{ steps.check_version.outputs.new_version }} detection deferred until existing PR resolved."
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - name: Checkout target branch
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+          branch="automation/copilot-watch-${NEW_VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -n "${{ steps.existing_pr_check.outputs.existing_own_pr }}" ]; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -B "$branch" origin/main
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Update manifest and package.json
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
@@ -77,7 +123,7 @@ jobs:
           echo "Updated manifest and package.json to version: $NEW_VERSION"
       - name: Analyze NAPI exports for new version
         id: napi_audit
-        if: steps.check_version.outputs.new_version != ''
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
@@ -108,11 +154,12 @@ jobs:
             echo "${DELIMITER}"
           } >> "$GITHUB_OUTPUT"
 
-          REVIEW_COUNT=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.newUnknown.length + a.newPendingGitAsync.length))" "$AUDIT_JSON")
+          REVIEW_COUNT=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.newUnknown.length + a.newPendingGitAsync.length + a.newStreamRisk.length))" "$AUDIT_JSON")
           echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
+          echo "tokio_patch_ok=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.tokioPatchOk))" "$AUDIT_JSON")" >> "$GITHUB_OUTPUT"
           echo "audit_skipped=false" >> "$GITHUB_OUTPUT"
       - name: Create issue for unknown NAPI exports
-        if: steps.check_version.outputs.new_version != '' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.review_count != '0' && steps.napi_audit.outputs.review_count != ''
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.review_count != '0' && steps.napi_audit.outputs.review_count != ''
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
@@ -137,6 +184,7 @@ jobs:
             lines.push("");
             lines.push(`newTokio: ${audit.newTokio.length}`);
             lines.push(`newPendingGitAsync: ${audit.newPendingGitAsync.length}`);
+            lines.push(`newStreamRisk: ${audit.newStreamRisk.length}`);
             lines.push(`newUnknown: ${audit.newUnknown.length}`);
             lines.push("");
 
@@ -150,6 +198,11 @@ jobs:
                 name: "newPendingGitAsync",
                 title: "## newPendingGitAsync（手動レビュー後にスタブ追加が必要）",
                 items: audit.newPendingGitAsync
+              },
+              {
+                name: "newStreamRisk",
+                title: "## newStreamRisk（ストリーム経路、必ず手動確認）",
+                items: audit.newStreamRisk
               },
               {
                 name: "newUnknown",
@@ -209,22 +262,98 @@ jobs:
 
             process.stdout.write(lines.join("\n").trimEnd() + "\n");
           ' | gh issue create --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
-      - name: Commit and push changes
-        if: steps.check_version.outputs.new_version != ''
+      - name: Commit changes to branch
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
+        id: commit_branch
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          branch="automation/copilot-watch-${NEW_VERSION}"
 
           git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/config/manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
-          git diff --staged --quiet && echo "No changes to commit" && exit 0
-          git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
 
-          git push
+          if [ -n "${{ steps.existing_pr_check.outputs.existing_own_pr }}" ]; then
+            # 既存PRを再利用する場合、今回diffが無くても(既にpush済みの内容のまま)mergeリトライへ進む
+            if git diff --staged --quiet; then
+              echo "No new changes, but existing PR needs merge retry"
+            else
+              git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
+              git push --force-with-lease origin "$branch"
+            fi
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          else
+            if git diff --staged --quiet; then
+              echo "No changes to commit"
+              echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            else
+              git commit -m "chore: detect copilot@${NEW_VERSION} and auto-update manifest/package.json"
+              git push --force-with-lease origin "$branch"
+              echo "has_changes=true" >> "$GITHUB_OUTPUT"
+              echo "branch=$branch" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Create or reuse manifest PR
+        if: steps.commit_branch.outputs.has_changes == 'true'
+        id: pr_create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch="${{ steps.commit_branch.outputs.branch }}"
+          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+          if [ -n "${{ steps.existing_pr_check.outputs.existing_own_pr }}" ]; then
+            pr_number="${{ steps.existing_pr_check.outputs.existing_own_pr }}"
+            echo "Reusing existing PR #${pr_number}"
+          else
+            pr_url=$(gh pr create --base main --head "$branch" \
+              --title "[copilot-manifest] Track copilot ${NEW_VERSION} candidate" \
+              --body "Automated upstream copilot intake for version ${NEW_VERSION}.")
+            pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$')
+            echo "PR created: $pr_url"
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+      - name: Safe-merge or leave for review
+        if: steps.commit_branch.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+        run: |
+          set -euo pipefail
+          pr_number="${{ steps.pr_create.outputs.pr_number }}"
+          audit_skipped="${{ steps.napi_audit.outputs.audit_skipped }}"
+          review_count="${{ steps.napi_audit.outputs.review_count }}"
+          tokio_patch_ok="${{ steps.napi_audit.outputs.tokio_patch_ok }}"
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
+          if ! gh api user >/dev/null 2>&1; then
+            echo "ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated" >&2
+            exit 1
+          fi
+
+          if [ "$audit_skipped" != "true" ] && [ "$review_count" = "0" ] && [ "$tokio_patch_ok" = "true" ]; then
+            branch="${{ steps.commit_branch.outputs.branch }}"
+            git fetch origin main "$branch"
+            pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+            if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+              echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
+              exit 1
+            fi
+            gh pr merge "$pr_number" --admin --squash --delete-branch
+            echo "safe_merged=true" >> "$GITHUB_OUTPUT"
+            echo "Manifest PR #${pr_number} merged (admin bypass, safe conditions met)"
+          else
+            echo "safe_merged=false" >> "$GITHUB_OUTPUT"
+            gh pr comment "$pr_number" --body "自動マージをスキップしました(audit_skipped=$audit_skipped, review_count=$review_count, tokio_patch_ok=$tokio_patch_ok)。要人間レビュー: docs/operations/platform-patch-update-guide.md に従いbehavioral stub実装確認後にマージしてください。マージ後は手動でnpm-package.ymlをdispatchしてください。"
+            echo "Manifest PR #${pr_number} left open for human review (safe-merge conditions not met)"
+          fi
+        id: safe_merge
       - name: Dispatch npm-package verify
-        if: steps.check_version.outputs.new_version != ''
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.safe_merge.outputs.safe_merged == 'true'
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"

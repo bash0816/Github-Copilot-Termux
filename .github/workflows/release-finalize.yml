@@ -10,23 +10,160 @@ on:
         description: 'Release notes (optional)'
         default: ''
 
+concurrency:
+  group: copilot-releases-write
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    env:
+      VER: ${{ inputs.version }}
+      NOTES_INPUT: ${{ inputs.release_notes }}
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Validate version format
+        run: |
+          set -eu
+          echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-zA-Z.]+)?(\.[0-9]+)?$' || {
+            echo "ERROR: Invalid version format: $VER" >&2
+            exit 1
+          }
+
       - uses: actions/checkout@v4
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ inputs.version }}
-          NOTES_INPUT: ${{ inputs.release_notes }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify release readiness
         run: |
+          set -eu
+          pkg_version=$(node -p "require('./packages/copilot-termux/package.json').version")
+          [ "$pkg_version" = "$VER" ] || { echo "ERROR: package.json version ($pkg_version) != input VERSION ($VER)" >&2; exit 1; }
+
+          manifest_audited=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').latest_audited_version")
+          [ "$manifest_audited" = "$VER" ] || { echo "ERROR: manifest latest_audited_version ($manifest_audited) != input VERSION ($VER)" >&2; exit 1; }
+
+          manifest_state=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').candidate_state")
+          [ "$manifest_state" = "promoted" ] || { echo "ERROR: manifest candidate_state ($manifest_state) != 'promoted'" >&2; exit 1; }
+
+          published=$(npm view "@bash0816/copilot-termux@${VER}" version 2>/dev/null || echo "")
+          [ "$published" = "$VER" ] || { echo "ERROR: not published on npm" >&2; exit 1; }
+          actual_latest=$(npm view "@bash0816/copilot-termux" "dist-tags.latest" 2>/dev/null || echo "")
+          [ "$actual_latest" = "$VER" ] || { echo "ERROR: dist-tags.latest=$actual_latest, expected $VER" >&2; exit 1; }
+          echo "Release readiness verified: $VER"
+
+      - name: Create GitHub Release
+        run: |
+          set -eu
           NOTES="$NOTES_INPUT"
-          [ -z "$NOTES" ] && NOTES="upstream @github/copilot@${VERSION} 追従。"
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --notes "$NOTES" \
-            --latest 2>/dev/null || echo "Release already exists, skipping"
+          [ -z "$NOTES" ] && NOTES="upstream @github/copilot@${VER} 追従。"
+          if gh release view "v${VER}" >/dev/null 2>&1; then
+            echo "Release v${VER} already exists, skipping creation"
+          else
+            gh release create "v${VER}" --title "v${VER}" --notes "$NOTES" --latest
+          fi
+
+      - name: Update RELEASES.md on feature branch then open PR
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          branch="automation/copilot-releases-${VER}"
+
+          own_pr=$(gh pr list --repo bash0816/Github-Copilot-Termux --base main --head "$branch" --state open \
+            --json number,headRepositoryOwner --jq '[.[] | select(.headRepositoryOwner.login == "bash0816")] | .[0].number // empty')
+          if [ -n "$own_pr" ]; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -B "$branch" origin/main
+          fi
+
+          date_str=$(TZ=Asia/Tokyo date +%Y-%m-%d)
+          notes="$NOTES_INPUT"
+          [ -z "$notes" ] && notes="upstream \`@github/copilot@${VER}\` 追従。"
+
+          if [ -f RELEASES.md ] && grep -qE "^## ${VER}([[:space:]]|$)" RELEASES.md; then
+            echo "RELEASES.md already has ${VER} entry"
+          else
+            sed -i 's/ 🚀 Latest \/ 最新版/ \/ 旧版/' RELEASES.md
+            entry=$(cat <<RELNOTES_EOF
+## ${VER} — ${date_str} 🚀 Latest / 最新版
+
+${notes}
+
+### Install
+
+\`\`\`sh
+npm install -g @bash0816/copilot-termux@latest
+copilot-termux setup
+copilot --version
+\`\`\`
+
+---
+
+RELNOTES_EOF
+)
+            printf '%s\n' "$entry" > /tmp/new_entry.md
+            if [ -f RELEASES.md ]; then
+              cat /tmp/new_entry.md RELEASES.md > /tmp/releases_new.md
+              mv /tmp/releases_new.md RELEASES.md
+            else
+              mv /tmp/new_entry.md RELEASES.md
+            fi
+          fi
+
+          git add RELEASES.md
+          if git diff --cached --quiet; then
+            echo "No new changes to RELEASES.md"
+          else
+            git commit -m "docs: update RELEASES.md for ${VER}"
+            git push --force-with-lease origin "$branch"
+          fi
+
+          if [ -n "$own_pr" ]; then
+            pr_number="$own_pr"
+            echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          else
+            if git log origin/main.."$branch" --oneline | grep -q .; then
+              pr_url=$(gh pr create --base main --head "$branch" --title "[copilot-manifest] docs: update RELEASES.md for ${VER}" --body "Automated RELEASES.md update for @bash0816/copilot-termux@${VER}.")
+              pr_number=$(echo "$pr_url" | grep -oE '[0-9]+$')
+              echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+              echo "branch=$branch" >> "$GITHUB_OUTPUT"
+            else
+              echo "No PR needed (no commits ahead of main)"
+            fi
+          fi
+        id: releases_pr
+
+      - name: Admin merge RELEASES.md PR
+        if: steps.releases_pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+        run: |
+          set -eu
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
+          if ! gh api user >/dev/null 2>&1; then
+            echo "ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated" >&2
+            exit 1
+          fi
+          pr_number="${{ steps.releases_pr.outputs.pr_number }}"
+          branch="${{ steps.releases_pr.outputs.branch }}"
+          git fetch origin main "$branch"
+          pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+            echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
+            exit 1
+          fi
+          gh pr merge "$pr_number" --admin --squash --delete-branch
