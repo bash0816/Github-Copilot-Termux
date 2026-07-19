@@ -92,7 +92,7 @@ return process.env.COPILOT_API_URL &&
 ### `b5711f7`（STEP 8）時点の指摘
 1. `Copilot-Integration-Id`: `copilot-chat` → `copilot-developer-cli` に修正
 2. /v2/token 失敗時の body ログは 500 文字に truncate
-3. `napi-known-exports.json` の behavioral_stubs から modelsFilterToPicker を削除
+3. `napi-known-exports.json` の behavioral_stubs から誤分類エントリを削除
 4. KNOWN-BUGS.md の表現修正
 
 ### `21c694f`（napi-audit）時点の指摘

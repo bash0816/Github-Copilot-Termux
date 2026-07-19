@@ -147,12 +147,9 @@ jobs:
 
           AUDIT_JSON=$(node scripts/napi-audit.js "$RUNTIME" "$NEW_VERSION" --auto-patch)
 
-          DELIMITER="NAPI_AUDIT_$(head -c 8 /dev/urandom | xxd -p)"
-          {
-            echo "audit_result<<${DELIMITER}"
-            printf '%s\n' "$AUDIT_JSON"
-            echo "${DELIMITER}"
-          } >> "$GITHUB_OUTPUT"
+          # 監査結果本体はGITHUB_OUTPUT/envに乗せず、ランナーローカルの一時ファイルに書く。
+          # (envブロック経由で渡すと、Actionsが自動的にログへ平文出力してしまうため。2026-07-19)
+          printf '%s' "$AUDIT_JSON" > "$RUNNER_TEMP/napi_audit_result.json"
 
           REVIEW_COUNT=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.newUnknown.length + a.newPendingGitAsync.length + a.newStreamRisk.length))" "$AUDIT_JSON")
           echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
@@ -161,20 +158,18 @@ jobs:
       - name: Create issue for unknown NAPI exports
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.review_count != '0' && steps.napi_audit.outputs.review_count != ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
           NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
-          AUDIT_RESULT: ${{ steps.napi_audit.outputs.audit_result }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
           node -e '
-            const audit = JSON.parse(process.env.AUDIT_RESULT);
+            const fs = require("fs");
+            const audit = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/napi_audit_result.json", "utf8"));
             const version = process.env.NEW_VERSION;
-            const serverUrl = process.env.GITHUB_SERVER_URL;
-            const repository = process.env.GITHUB_REPOSITORY;
-            const runId = process.env.GITHUB_RUN_ID;
 
             const SAFE_LIMIT = 50000;
             const lines = [];
@@ -223,8 +218,7 @@ jobs:
                 // Remaining sections cannot fit, add consolidated notice
                 const remainingCount = sections.slice(sectionIdx).reduce((sum, s) => sum + s.items.length, 0);
                 lines.push("");
-                lines.push(`... および他 ${remainingCount} 件は本文上限により表示を省略しました。`);
-                lines.push(`[Workflow run のログで全件確認](${serverUrl}/${repository}/actions/runs/${runId})`);
+                lines.push(`... および他 ${remainingCount} 件は本文上限により表示を省略しました(このリポジトリの再監査で再度検出されます)。`);
                 truncated = true;
                 break;
               }
@@ -245,8 +239,7 @@ jobs:
                   const totalRemaining = remainingInSection + sections.slice(sectionIdx + 1).reduce((sum, s) => sum + s.items.length, 0);
 
                   lines.push("");
-                  lines.push(`... および他 ${totalRemaining} 件は本文上限により表示を省略しました。`);
-                  lines.push(`[Workflow run のログで全件確認](${serverUrl}/${repository}/actions/runs/${runId})`);
+                  lines.push(`... および他 ${totalRemaining} 件は本文上限により表示を省略しました(このリポジトリの再監査で再度検出されます)。`);
                   truncated = true;
                   break;
                 }
@@ -261,7 +254,7 @@ jobs:
             }
 
             process.stdout.write(lines.join("\n").trimEnd() + "\n");
-          ' | gh issue create --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
+          ' | gh issue create --repo bash0816/Github-Copilot-Termux-Private --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
       - name: Commit changes to branch
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
         id: commit_branch
