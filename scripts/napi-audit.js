@@ -121,17 +121,6 @@ function patchTokioPattern(platformPatchPath, additions) {
   return updated !== original;
 }
 
-function appendPendingGitAsyncStubs(configPath, additions) {
-  if (!additions.length) return false;
-  const config = readJson(configPath);
-  const existing = Array.isArray(config.pending_git_async_stubs) ? config.pending_git_async_stubs : [];
-  const merged = uniqueSorted([...existing, ...additions]);
-  if (merged.length === existing.length) return false;
-  config.pending_git_async_stubs = merged;
-  writeJson(configPath, config);
-  return true;
-}
-
 function updateKnownExportsConfig(configPath, updates) {
   const config = readJson(configPath);
   let changed = false;
@@ -147,7 +136,9 @@ function updateKnownExportsConfig(configPath, updates) {
   };
 
   appendUnique('tokio_noop_prefixes', updates.newTokio);
-  appendUnique('behavioral_stubs', updates.newUnknown);
+  // behavioral_stubs(newUnknownの生データ)はランタイムで未使用の監査状態管理フィールドであり、
+  // public repoにコミットされるこのconfigへは永続化しない
+  // (2026-07-19、内部監査の未分類関数名をpublicに残さない方針のため)
 
   if (changed) writeJson(configPath, config);
   return changed;
@@ -158,19 +149,19 @@ function maybeAutoPatch(rootDir, updates) {
   const configPath = path.join(rootDir, 'config', 'napi-known-exports.json');
 
   const tokioPatched = patchTokioPattern(platformPatchPath, updates.newTokio);
-  const pendingGitPatched = appendPendingGitAsyncStubs(configPath, updates.newPendingGitAsync);
+  // pending_git_async_stubs(newPendingGitAsyncの生データ)も同じ理由でpublicへ永続化しない。
+  // 該当項目はprivate repoのissueで都度レビューする運用に統一する(2026-07-19)。
 
   // platform-patch.js への反映に成功した分のみ config に記録する
   // 失敗した場合に config へ記録すると次回監査で「既知」と誤判定されるため
   const configUpdates = {
     newTokio: tokioPatched ? updates.newTokio : [],
-    newUnknown: updates.newUnknown,
   };
   const configPatched = updateKnownExportsConfig(configPath, configUpdates);
 
   const tokioPatchOk = updates.newTokio.length === 0 || tokioPatched;
 
-  return { patchApplied: tokioPatched || pendingGitPatched || configPatched, tokioPatchOk };
+  return { patchApplied: tokioPatched || configPatched, tokioPatchOk };
 }
 
 function main() {
@@ -227,7 +218,6 @@ module.exports = {
   loadKnownSet,
   loadPendingSet,
   patchTokioPattern,
-  appendPendingGitAsyncStubs,
   updateKnownExportsConfig,
   maybeAutoPatch,
 };

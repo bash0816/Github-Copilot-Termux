@@ -418,3 +418,59 @@ test('maybeAutoPatch - tokioPatchOk flag', async (t) => {
     }
   });
 });
+
+test('maybeAutoPatch - does not persist behavioral_stubs or pending_git_async_stubs', async (t) => {
+  await t.test('should not write newUnknown/newPendingGitAsync to the config file', () => {
+    const tmpDir = path.join(__dirname, '.test-patch-no-persist-tmp');
+    const rootDir = tmpDir;
+
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const pkgDir = path.join(rootDir, 'packages', 'copilot-termux', 'lib');
+    const configDir = path.join(rootDir, 'config');
+
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true });
+
+    const platformPatchPath = path.join(pkgDir, 'platform-patch.js');
+    fs.writeFileSync(platformPatchPath, '      const TOKIO_PATTERN = /^(existingPrefix)/;\n');
+
+    const configPath = path.join(configDir, 'napi-known-exports.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      tokio_noop_prefixes: [],
+      behavioral_stubs: [],
+      git_async_stubs: [],
+      stream_pipeline_risk: [],
+      pending_git_async_stubs: [],
+    }, null, 2) + '\n');
+
+    try {
+      const updates = {
+        newTokio: [],
+        newPendingGitAsync: ['gitSomeNewAsyncFn'],
+        newStreamRisk: [],
+        newUnknown: ['someUnclassifiedInternalFunctionName'],
+      };
+
+      maybeAutoPatch(rootDir, updates);
+
+      const configAfter = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      assert.deepEqual(configAfter.behavioral_stubs, [], 'behavioral_stubs should remain empty (not persisted to public config)');
+      assert.deepEqual(configAfter.pending_git_async_stubs, [], 'pending_git_async_stubs should remain empty (not persisted to public config)');
+    } finally {
+      const cleanup = (dir) => {
+        if (fs.existsSync(dir)) {
+          fs.readdirSync(dir).forEach((file) => {
+            const fullPath = path.join(dir, file);
+            if (fs.statSync(fullPath).isDirectory()) {
+              cleanup(fullPath);
+            } else {
+              fs.unlinkSync(fullPath);
+            }
+          });
+          fs.rmdirSync(dir);
+        }
+      };
+      cleanup(tmpDir);
+    }
+  });
+});
