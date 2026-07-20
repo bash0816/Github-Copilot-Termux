@@ -74,8 +74,6 @@ copilot-termux setup
 
 ## Known Issues / 既知の問題
 
-- 詳細・過去の修正履歴は [`docs/KNOWN-BUGS.md`](docs/KNOWN-BUGS.md) 参照
-
 ## Do Not Use / 非推奨
 
 `@github/copilot` を Termux に直接インストールしないでください。bionic 非互換で動作しません。
