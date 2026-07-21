@@ -336,3 +336,30 @@ GITHUB_COPILOT_VERBOSITY=debug copilot -p "テスト" 2>&1 | head -100
 | TC-6 Free→Enterprise 切替 | 切替後 TC-3/4 相当の動作 |
 
 TC-1〜TC-4 が全合格でリリース可。TC-5/TC-6 は余裕があれば確認。
+
+**1.0.72 candidate 実施記録（2026-07-21）**: TC-1（Free TUI）・TC-2（Free `-p`、非TUI
+スモークテスト内で実施）・TC-3（Enterprise TUI）・TC-4（Enterprise `-p`）全て実機確認済み、
+クラッシュ・エラーなし（Pass）。TC-5/TC-6 は未実施（スコープ外）。
+
+---
+
+## 1.0.72 candidate 非TUI検証時の判明事項（2026-07-21）
+
+1.0.72 で新規追加された NAPI export 6件のうち、`sessionSqliteFileExists` /
+`sessionSqliteOpen` / `sessionSqliteQuery` / `sessionSqliteRun` は
+`platform-patch.js` の `TOKIO_PATTERN` 一括 no-op 化に加えて、個別の固定値
+スタブ（`sessionSqliteQuery` は常に `{ rows: '[]' }`、`sessionSqliteFileExists`
+は常に `false` 等）に置き換えられている。既存の bionic 向け no-op／固定値スタブ
+方針の踏襲であり、今回新たに壊れたものではない（`sessionStore*` 系の一括
+`undefined` 化とは方式が異なる点に注意）。
+
+非TUIスモークテストで `copilot -p "プロンプト履歴を保存して"` 等を実行した際、
+CLI は「保存した」という体裁の応答を返したが、これは Copilot CLI 側の応答文言を
+見ただけであり、**SQLite への実際の永続化は行われていない**（no-op スタブが
+返しているため）。「新規NAPI exportが正常動作した」という表現は不正確で、正しくは
+「no-op化された状態でもCLIがクラッシュせず動作継続することを確認した」が実態。
+
+**確認ポイント**: bionic モードでは `sessionSqlite*` 系はそもそも機能しない
+（意図的な安全策）。今後この系統に手を入れる場合、「動いているように見える」
+応答だけで判断せず、`platform-patch.js` の TOKIO_PATTERN / 個別スタブ一覧を
+必ず確認すること。
