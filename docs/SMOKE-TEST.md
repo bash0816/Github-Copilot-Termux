@@ -363,3 +363,27 @@ CLI は「保存した」という体裁の応答を返したが、これは Cop
 （意図的な安全策）。今後この系統に手を入れる場合、「動いているように見える」
 応答だけで判断せず、`platform-patch.js` の TOKIO_PATTERN / 個別スタブ一覧を
 必ず確認すること。
+
+---
+
+## 1.0.73 candidate 実施記録（2026-07-21）
+
+**変更内容**: PR #33（`chore: detect copilot@1.0.73 and auto-update manifest/package.json`,
+commit `5f6b3d7`）は `copilot-termux-release-manifest.json` / `manifest.json`（copilot
+バージョン・integrity hash）/ `package.json` のバージョン番号のみの機械的差分。
+`platform-patch.js` ・ `config/napi-known-exports.json`（`last_audited_copilot_version`
+は `1.0.71` のまま）に変更なし。NAPI新規exportの検知・追随は今回発生していないことを
+確認済み（1.0.72で追加された `sessionSqlite*` 系のTOKIO_PATTERN登録はそのまま流用）。
+この機械的差分パターンのため、過去の同型リリース同様G3コーディングレビューは省略しG4検証
+レビューに直行する方針。
+
+**非TUIスモークテスト**（このマシン、`npm pack` → `npm install -g` 経由）:
+- tgz: `bash0816-copilot-termux-1.0.73.tgz` sha256=
+  `1047237891ad213dbc600952ed1396c8181b0cb1bd993fad5aae784e650c507f`
+- `copilot --version` → `GitHub Copilot CLI 1.0.73.`（exit 0）
+- `copilot -p "1+1は何ですか？一言で答えてください"` → `2`（exit 0、クラッシュなし）
+
+**TUI検証（ユーザー本人実施、申告）**: TC-1（Free TUI）・TC-2（Free `-p`）・TC-3
+（Enterprise TUI）・TC-4（Enterprise `-p`）の4項目すべて実施、両アカウントとも異常なし
+との申告あり（2026-07-21）。TUI例外ルールに基づきユーザー申告を証跡として扱う。
+TC-5/TC-6（アカウント切替）は今回未実施（過去バージョン同様スコープ外）。
