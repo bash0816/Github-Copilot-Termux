@@ -3,13 +3,13 @@
   "package_name": "@bash0816/copilot-termux",
   "copilot_version": "1.0.72",
   "latest_audited_version": "1.0.71",
-  "latest_candidate_version": null,
+  "latest_candidate_version": "1.0.72",
   "previous_stable_version": "1.0.70",
-  "candidate_state": "none",
+  "candidate_state": "published",
   "canonical_package_status": "not_published",
   "public_distribution_status": "staged",
   "nodejs_glibc_version": "node-glibc-v24.15.0",
   "build_run_id": null,
-  "last_updated": "2026-07-20",
+  "last_updated": "2026-07-21",
   "manifest_url": "https://raw.githubusercontent.com/bash0816/Github-Copilot-Termux/main/packages/copilot-termux/config/copilot-termux-release-manifest.json"
 }
