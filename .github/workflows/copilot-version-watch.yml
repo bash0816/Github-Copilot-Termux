@@ -154,9 +154,30 @@ jobs:
           REVIEW_COUNT=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.newUnknown.length + a.newPendingGitAsync.length + a.newStreamRisk.length))" "$AUDIT_JSON")
           echo "review_count=$REVIEW_COUNT" >> "$GITHUB_OUTPUT"
           echo "tokio_patch_ok=$(node -e "const a=JSON.parse(process.argv[1]); process.stdout.write(String(a.tokioPatchOk))" "$AUDIT_JSON")" >> "$GITHUB_OUTPUT"
+          echo "issue_needed=$(node -e "const { isIssueNeeded } = require('./scripts/napi-issue-body.js'); const a=JSON.parse(process.argv[1]); process.stdout.write(String(isIssueNeeded(a)))" "$AUDIT_JSON")" >> "$GITHUB_OUTPUT"
           echo "audit_skipped=false" >> "$GITHUB_OUTPUT"
+      - name: Check for existing NAPI audit issue
+        id: napi_issue_check
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.issue_needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+          NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
+            exit 1
+          fi
+          count=$(gh issue list --repo bash0816/Github-Copilot-Termux-Private --state open \
+            --search "in:title is:open \"copilot@${NEW_VERSION}:\"" \
+            --json number --jq 'length')
+          if [ "$count" -gt 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create issue for unknown NAPI exports
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.review_count != '0' && steps.napi_audit.outputs.review_count != ''
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.issue_needed == 'true' && steps.napi_issue_check.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
           NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
@@ -168,92 +189,10 @@ jobs:
           fi
           node -e '
             const fs = require("fs");
+            const { generateIssueBody } = require("./scripts/napi-issue-body.js");
             const audit = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/napi_audit_result.json", "utf8"));
             const version = process.env.NEW_VERSION;
-
-            const SAFE_LIMIT = 50000;
-            const lines = [];
-
-            // Header section
-            lines.push(`copilot@${version} の NAPI 監査結果`);
-            lines.push("");
-            lines.push(`newTokio: ${audit.newTokio.length}`);
-            lines.push(`newPendingGitAsync: ${audit.newPendingGitAsync.length}`);
-            lines.push(`newStreamRisk: ${audit.newStreamRisk.length}`);
-            lines.push(`newUnknown: ${audit.newUnknown.length}`);
-            lines.push("");
-
-            const sections = [
-              {
-                name: "newTokio",
-                title: "## newTokio",
-                items: audit.newTokio
-              },
-              {
-                name: "newPendingGitAsync",
-                title: "## newPendingGitAsync（手動レビュー後にスタブ追加が必要）",
-                items: audit.newPendingGitAsync
-              },
-              {
-                name: "newStreamRisk",
-                title: "## newStreamRisk（ストリーム経路、必ず手動確認）",
-                items: audit.newStreamRisk
-              },
-              {
-                name: "newUnknown",
-                title: "## newUnknown",
-                items: audit.newUnknown
-              }
-            ];
-
-            let truncated = false;
-
-            for (let sectionIdx = 0; sectionIdx < sections.length && !truncated; sectionIdx++) {
-              const section = sections[sectionIdx];
-              if (section.items.length === 0) continue;
-
-              // Check if section title fits
-              const testWithTitle = [...lines, section.title, ""].join("\n");
-              if (testWithTitle.length >= SAFE_LIMIT) {
-                // Remaining sections cannot fit, add consolidated notice
-                const remainingCount = sections.slice(sectionIdx).reduce((sum, s) => sum + s.items.length, 0);
-                lines.push("");
-                lines.push(`... および他 ${remainingCount} 件は本文上限により表示を省略しました(このリポジトリの再監査で再度検出されます)。`);
-                truncated = true;
-                break;
-              }
-
-              lines.push(section.title);
-              let sectionItemCount = 0;
-
-              for (let itemIdx = 0; itemIdx < section.items.length; itemIdx++) {
-                const item = section.items[itemIdx];
-                const itemLine = `- ${item}`;
-                const testWithItem = [...lines, itemLine].join("\n");
-
-                // Reserve space for truncation notice (estimate)
-                const truncNoticeEstimate = 250;
-                if (testWithItem.length + truncNoticeEstimate >= SAFE_LIMIT) {
-                  // Cannot fit this item and truncation notice, stop here
-                  const remainingInSection = section.items.length - sectionItemCount;
-                  const totalRemaining = remainingInSection + sections.slice(sectionIdx + 1).reduce((sum, s) => sum + s.items.length, 0);
-
-                  lines.push("");
-                  lines.push(`... および他 ${totalRemaining} 件は本文上限により表示を省略しました(このリポジトリの再監査で再度検出されます)。`);
-                  truncated = true;
-                  break;
-                }
-
-                lines.push(itemLine);
-                sectionItemCount++;
-              }
-
-              if (!truncated && sectionIdx < sections.length - 1) {
-                lines.push("");
-              }
-            }
-
-            process.stdout.write(lines.join("\n").trimEnd() + "\n");
+            process.stdout.write(generateIssueBody(audit, version));
           ' | gh issue create --repo bash0816/Github-Copilot-Termux-Private --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
       - name: Commit changes to branch
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
