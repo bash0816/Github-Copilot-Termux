@@ -282,6 +282,15 @@ try {
   failCount++;
 }
 
+// 12. GIT-ASYNC-002 bionic wiring 回帰テスト（実際のruntime.node置換経路を通す、非同期）
+try {
+  await runGitAsyncStubsWiringRegressionTest();
+} catch (e) {
+  console.error('[Error] GIT-ASYNC-002 wiring regression test threw:', e.message);
+  console.error(e.stack);
+  failCount++;
+}
+
 // 結果レポート
 console.log('\n' + '='.repeat(60));
 console.log(`Test Results: ${passCount} PASS, ${failCount} FAIL`);
@@ -521,5 +530,83 @@ async function runNetworkFetchRegressionTests() {
 
   } finally {
     restoreAll();
+  }
+}
+
+// ============================================================
+// GIT-ASYNC-002: bionic上書き経路(Module._load → runtime.node判定 → GIT_ASYNC_STUBS差し替え)
+// を通して、新規3関数(gitLegacyRemotesAsync/gitRepoIdentifierAtPathAsync/
+// gitWorkingDirectoryContextAsync)が実際にJSスタブへ置換されることを確認する。
+// ============================================================
+async function runGitAsyncStubsWiringRegressionTest() {
+  console.log('\n[Test] GIT-ASYNC-002 bionic wiring (runtime.node replacement, async)');
+
+  const platformPatchCacheKey = require.resolve(platformPatchPath);
+  const originalModuleLoad = Module._load;
+  const savedGlibcEnv = process.env.COPILOT_TERMUX_GLIBC_MODE;
+
+  // ダミーのNAPI実装。呼ばれたら分かるようにマーカー値を返す(bionic上書きで
+  // 実git実装に置き換わっていれば、このダミー値は絶対に返らないはず)。
+  function fakeRuntimeNodeExports() {
+    return {
+      gitLegacyRemotesAsync: async () => 'DUMMY_NATIVE_VALUE',
+      gitRepoIdentifierAtPathAsync: async () => 'DUMMY_NATIVE_VALUE',
+      gitWorkingDirectoryContextAsync: async () => 'DUMMY_NATIVE_VALUE',
+    };
+  }
+
+  function restoreAll() {
+    Module._load = originalModuleLoad;
+    if (savedGlibcEnv === undefined) delete process.env.COPILOT_TERMUX_GLIBC_MODE;
+    else process.env.COPILOT_TERMUX_GLIBC_MODE = savedGlibcEnv;
+    delete require.cache[platformPatchCacheKey];
+  }
+
+  const tmpRepo = fs.mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'git-async-wiring-'));
+
+  try {
+    delete process.env.COPILOT_TERMUX_GLIBC_MODE;
+
+    delete require.cache[platformPatchCacheKey];
+    Module._load = function (request, parent, isMain) {
+      if (typeof request === 'string' && path.basename(request) === 'runtime.node') {
+        return fakeRuntimeNodeExports();
+      }
+      return originalModuleLoad.call(this, request, parent, isMain);
+    };
+
+    require(platformPatchPath);
+    const patchedRuntime = require('runtime.node');
+
+    assert(typeof patchedRuntime.gitLegacyRemotesAsync === 'function',
+      'GIT-ASYNC-002: bionic-patched runtime.node exports gitLegacyRemotesAsync as function');
+    assert(typeof patchedRuntime.gitRepoIdentifierAtPathAsync === 'function',
+      'GIT-ASYNC-002: bionic-patched runtime.node exports gitRepoIdentifierAtPathAsync as function');
+    assert(typeof patchedRuntime.gitWorkingDirectoryContextAsync === 'function',
+      'GIT-ASYNC-002: bionic-patched runtime.node exports gitWorkingDirectoryContextAsync as function');
+
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: tmpRepo });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmpRepo });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: tmpRepo });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/owner/repo.git'], { cwd: tmpRepo });
+
+    const remotes = await patchedRuntime.gitLegacyRemotesAsync(tmpRepo);
+    assert(remotes !== 'DUMMY_NATIVE_VALUE' && Array.isArray(remotes) && remotes.length === 1 &&
+      remotes[0].Name === 'origin' && remotes[0].FetchURL === 'https://github.com/owner/repo.git',
+      'GIT-ASYNC-002: gitLegacyRemotesAsync via bionic-patched runtime.node returns real remote data, not the dummy native stub');
+
+    const identifier = await patchedRuntime.gitRepoIdentifierAtPathAsync(tmpRepo);
+    assert(identifier !== 'DUMMY_NATIVE_VALUE' && identifier && identifier.identifier === 'owner/repo' &&
+      identifier.hostType === 'github',
+      'GIT-ASYNC-002: gitRepoIdentifierAtPathAsync via bionic-patched runtime.node returns real identifier, not the dummy native stub');
+
+    const context = await patchedRuntime.gitWorkingDirectoryContextAsync(tmpRepo);
+    assert(context !== 'DUMMY_NATIVE_VALUE' && context && context.gitRoot === tmpRepo &&
+      context.repository === 'owner/repo',
+      'GIT-ASYNC-002: gitWorkingDirectoryContextAsync via bionic-patched runtime.node returns real context, not the dummy native stub');
+
+  } finally {
+    restoreAll();
+    fs.rmSync(tmpRepo, { recursive: true, force: true });
   }
 }
