@@ -46,6 +46,83 @@ async function hashFileContent(gitRoot, filePath) {
   }
 }
 
+// GIT-ASYNC-002: bionicフォールバック限定のSIGSEGV(gitLegacyRemotesAsync/gitWorkingDirectoryContextAsync/
+// gitRepoIdentifierAtPathAsync、いずれもRust tokio非同期)をJSスタブで置換するための共通ヘルパー。
+// git CLI(`git remote -v`)の出力をパースしてリモート一覧を取得する。shell経由なし(execFileAsync配列引数)。
+async function listGitRemotes(gitRoot) {
+  const out = await runGit(gitRoot, ['remote', '-v']);
+  if (!out) return [];
+  const seen = new Set();
+  const remotes = [];
+  for (const line of out.split('\n')) {
+    const m = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line);
+    if (!m) continue;
+    const [, name, url] = m;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    remotes.push({ Name: name, FetchURL: url });
+  }
+  return remotes;
+}
+
+// git remote URLをowner/name/hostへパースする。https/ssh/scp-like形式に対応。
+// パース不能な場合はnullを返す(呼び出し側はrepository情報なしとして扱う)。
+function parseGitRemoteUrl(url) {
+  if (!url) return null;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) {
+    // scp-like: [user@]host:path (例: git@github.com:owner/repo.git)
+    const m = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(url);
+    if (!m) return null;
+    const host = m[1];
+    const parts = m[2].replace(/\.git$/, '').split('/').filter(Boolean);
+    if (parts.length < 2) return null;
+    return { host, owner: parts[parts.length - 2], name: parts[parts.length - 1] };
+  }
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.replace(/\.git$/, '').split('/').filter(Boolean);
+    if (parts.length < 2) return null;
+    return { host: u.hostname, owner: parts[parts.length - 2], name: parts[parts.length - 1] };
+  } catch (_) {
+    return null;
+  }
+}
+
+// origin(なければ先頭のリモート)からリポジトリ識別子を解決する。
+// vendor実装(app.jsの`tge()`/`tmr()`相当)に合わせ、GitHub Cloud(github.com/*.ghe.com)以外は
+// hostTypeを'other'とする(自己ホストGHE Serverの判定手がかりがないのは実装側と同じ制約)。
+async function resolveRepoIdentifier(gitRoot) {
+  const remotes = await listGitRemotes(gitRoot);
+  if (!remotes.length) return null;
+  const origin = remotes.find((r) => r.Name === 'origin') || remotes[0];
+  const parsed = parseGitRemoteUrl(origin.FetchURL);
+  if (!parsed) return null;
+  const hostType = (parsed.host === 'github.com' || parsed.host.endsWith('.ghe.com')) ? 'github' : 'other';
+  return { identifier: `${parsed.owner}/${parsed.name}`, hostType, host: parsed.host };
+}
+
+// working directory context: cwdからgitRoot/branch/repository情報を解決する。
+// vendor実装(gitWorkingDirectoryContextAsync)と同じく、非git配下ではcwdのみを持つ
+// オブジェクトを返す(nullは返さない。nullを返すと呼び出し側で`.gitRoot`アクセス時に
+// TypeErrorが発生し無応答exit 0になることを実機で確認済み)。
+async function buildWorkingDirectoryContext(cwd) {
+  const result = { cwd };
+  const rootOut = await runGit(cwd, ['rev-parse', '--show-toplevel']);
+  const gitRoot = rootOut ? rootOut.trim() : null;
+  if (!gitRoot) return result;
+  result.gitRoot = gitRoot;
+  const branchOut = await runGit(gitRoot, ['branch', '--show-current']);
+  const branch = branchOut ? branchOut.trim() : '';
+  if (branch) result.branch = branch;
+  const identifier = await resolveRepoIdentifier(gitRoot);
+  if (identifier) {
+    result.repository = identifier.identifier;
+    result.hostType = identifier.hostType;
+    result.repositoryHost = identifier.host;
+  }
+  return result;
+}
+
 const _pkgVersion = (() => {
   try { return require(path.join(__dirname, '..', 'package.json')).version; } catch (_) { return '1.0.65'; }
 })();
@@ -209,6 +286,9 @@ Module._load = function (request, parent, isMain) {
           if (!out) return [];
           return out.split('\n').filter(Boolean);
         },
+        gitLegacyRemotesAsync: async (gitRoot) => listGitRemotes(gitRoot),
+        gitRepoIdentifierAtPathAsync: async (gitRoot) => resolveRepoIdentifier(gitRoot),
+        gitWorkingDirectoryContextAsync: async (cwd) => buildWorkingDirectoryContext(cwd),
       };
       for (const [key, stub] of Object.entries(GIT_ASYNC_STUBS)) {
         if (typeof result[key] === 'function') result[key] = stub;
@@ -1532,3 +1612,7 @@ if (!globalThis.__COPILOT_TERMUX_ESM_PATCH_REGISTERED__) {
 
 module.exports.patchAppJsSource = patchAppJsSource;
 module.exports.isTargetCopilotAppJsUrl = isTargetCopilotAppJsUrl;
+module.exports.listGitRemotes = listGitRemotes;
+module.exports.parseGitRemoteUrl = parseGitRemoteUrl;
+module.exports.resolveRepoIdentifier = resolveRepoIdentifier;
+module.exports.buildWorkingDirectoryContext = buildWorkingDirectoryContext;
