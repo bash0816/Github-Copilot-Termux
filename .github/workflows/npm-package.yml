@@ -87,6 +87,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     concurrency:
       group: copilot-manifest-write
       cancel-in-progress: false
@@ -358,6 +359,7 @@ jobs:
 
       - name: Admin merge manifest PR (retag)
         if: ${{ fromJSON(inputs.retag_latest) }}
+        id: admin_merge_retag
         env:
           GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
           PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
@@ -414,3 +416,24 @@ jobs:
             }
           "
           gh pr merge "$pr_number" --admin --squash --delete-branch
+          git fetch origin main
+          promoted_version=$(git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest_audited_version")
+          npm_latest=$(npm view "$(node -p "require('./packages/copilot-termux/package.json').name")" dist-tags.latest 2>/dev/null || echo "")
+          if [ "$promoted_version" != "$npm_latest" ]; then
+            echo "ERROR: merged manifest latest_audited_version ($promoted_version) does not match npm dist-tags.latest ($npm_latest)" >&2
+            exit 1
+          fi
+          echo "promoted_version=$promoted_version" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release-finalize
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.admin_merge_retag.outputs.promoted_version }}"
+          gh workflow run release-finalize.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            --field version="${VER}"
+          echo "Dispatched release-finalize for ${VER}"
