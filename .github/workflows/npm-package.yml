@@ -56,6 +56,29 @@ jobs:
           tar -tzf "$TARBALL" | grep -Fx 'package/lib/setup.js' || { echo "ERROR: setup.js not in tarball"; exit 1; }
           echo "Tarball contents OK"
 
+      - name: Validate dispatch mode (pre-approval)
+        env:
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
+        run: |
+          set -euo pipefail
+          node -e "
+            const publish = '${{ inputs.publish }}' === 'true';
+            const retagLatest = '${{ inputs.retag_latest }}' === 'true';
+            if (publish && retagLatest) {
+              throw new Error('publish and retag_latest cannot both be true');
+            }
+            if (retagLatest && !process.env.PREVIOUS_AUDITED_VERSION) {
+              throw new Error('previous_audited_version is required when retag_latest is true');
+            }
+            if (retagLatest) {
+              const manifest = require('./packages/copilot-termux/config/copilot-termux-release-manifest.json');
+              if (process.env.PREVIOUS_AUDITED_VERSION !== manifest.latest_audited_version) {
+                throw new Error('previous_audited_version (' + process.env.PREVIOUS_AUDITED_VERSION + ') does not match manifest latest_audited_version (' + manifest.latest_audited_version + ')');
+              }
+            }
+          "
+          echo "Pre-approval validation passed"
+
   publish:
     needs: verify
     if: ${{ (fromJSON(inputs.publish) || fromJSON(inputs.retag_latest)) && github.ref == 'refs/heads/main' }}
