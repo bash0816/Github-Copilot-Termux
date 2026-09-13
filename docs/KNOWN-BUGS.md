@@ -55,3 +55,29 @@
 
 - issue #35(bash0816/Github-Copilot-Termux-Private)
 - 遡及レビュー方針決定: ユーザーが「全6ファイルを遡及レビュー」を選択(2026-09-13)
+
+## issue #32・#34修正時にスコープ外とした事項(2026-09-14、先送りであり解決済みではない)
+
+issue #32(retag_latest必須パラメータ検証タイミング)・issue #34(npm latest昇格後の
+release-finalize.yml自動dispatch欠落)の修正(commit 1fa46a3・PR#95によるissue #34修正時、
+G3レビュー[Claude Opus 5、terra週間制限フォールバック]で以下がNon-blockerとして指摘された。
+**Non-blocker=バグではないという意味ではなく、今回のスコープでは対応しきれなかった項目**:
+
+1. **release-finalize.ymlのPRタイトル`[copilot-manifest]`プレフィックスとnpm-package.ymlの
+   "他にopenなmanifest-write PRがあればエラー"ガードの潜在的結合**: release-finalize.ymlが
+   途中失敗してRELEASES.md用PRをopenのまま残すと、次回リリースのnpm-package.yml内
+   manifest更新ステップがブロックされる。手動dispatch時代から存在した結合だが、
+   自動化(issue #34対応)により失敗が気づかれにくくなる分リスクが上がった。
+   実害: 現時点でopen PRは0件、未発生。次回リリースで異常終了があれば要注意。
+
+2. **docs/operations/release-runbook.md:318のSTEP 7が未更新**: 「GitHub Release作成(手動)」
+   という記述のまま、手動`gh workflow run release-finalize.yml`の実行例が残っている。
+   issue #34対応で自動dispatchされるようになったため、記述を更新する必要がある。
+   実害: ドキュメントが実態と乖離しているだけで、機能的な実害はない。
+
+3. **already_retagged再実行経路でのリカバリ未対応(issue #34対応の対象外)**: 既にlatest昇格済み
+   だがrelease-finalize未実施のまま放置された版に対し、npm-package.ymlを再実行しても
+   `last_updated`が当日と同じ場合`git diff --staged --quiet`が真になりPR作成がスキップされ、
+   結果としてDispatch release-finalizeステップまで到達しない。
+   実害: 自動dispatchが何らかの理由で失敗した場合、npm-package.ymlの再実行では復旧できず、
+   従来通り`gh workflow run release-finalize.yml`の手動実行が必要(現状と同じ、退行ではない)。
