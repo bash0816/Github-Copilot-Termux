@@ -17,9 +17,15 @@
 | 種別 | 場所 |
 |------|------|
 | 設計ルール・禁止事項 | `docs/<テーマ>.md` |
-| バグ記録 | `docs/KNOWN-BUGS.md` |
+| バグ記録（エンドユーザー向け・症状と再現条件のみ） | `docs/KNOWN-BUGS.md`（public repo。内部実装詳細・未修正の脆弱性詳細は書かない） |
+| バグ記録（内部監査・未修正の脆弱性詳細・調査ログ） | `bash0816/Github-Copilot-Termux-Private` の Issue |
 | 動作確認手順 | `docs/SMOKE-TEST.md` |
 | 操作手順 | `docs/operations/` |
+
+⛔ このリポジトリ（Github-Copilot-Termux）は **public**。新規ドキュメントファイルを作成する前に
+`gh repo view bash0816/Github-Copilot-Termux --json visibility` で対象がpublicであることを
+再確認し、内容が内部戦略・未修正の脆弱性詳細に該当する場合は必ず上記privateリポジトリのIssueに書く
+（2026-09-14: Claude自身がdocs/KNOWN-BUGS.mdにBlocker3・4の詳細を誤って公開した違反の再発防止）。
 
 ---
 
