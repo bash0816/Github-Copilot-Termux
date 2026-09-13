@@ -38,25 +38,29 @@ function listDistTags() {
   runNpm(['dist-tag', 'ls', packageName], { stdio: 'inherit' });
 }
 
-function restoreTags(previousLatest, previousCandidate) {
+function restoreTags(previousLatest, previousCandidate, deps = { addDistTag, removeDistTag }) {
+  const failures = [];
   if (previousLatest) {
     try {
-      addDistTag(previousLatest, 'latest');
+      deps.addDistTag(previousLatest, 'latest');
     } catch (error) {
-      console.error(error && error.stack ? error.stack : String(error));
+      failures.push({ tag: 'latest', target: previousLatest, error: error && error.stack ? error.stack : String(error) });
     }
   }
   if (previousCandidate) {
     try {
-      addDistTag(previousCandidate, 'candidate');
+      deps.addDistTag(previousCandidate, 'candidate');
     } catch (error) {
-      console.error(error && error.stack ? error.stack : String(error));
+      failures.push({ tag: 'candidate', target: previousCandidate, error: error && error.stack ? error.stack : String(error) });
     }
   } else {
     try {
-      removeDistTag('candidate');
-    } catch {}
+      deps.removeDistTag('candidate');
+    } catch (error) {
+      failures.push({ tag: 'candidate', target: '(remove)', error: error && error.stack ? error.stack : String(error) });
+    }
   }
+  return { ok: failures.length === 0, failures };
 }
 
 function main() {
@@ -83,11 +87,12 @@ function main() {
       addDistTag(previousLatest, 'candidate');
     }
   } catch (error) {
-    try {
-      restoreTags(previousLatest, previousCandidate);
-    } catch (restoreError) {
-      const restoreMessage = restoreError && restoreError.stack ? restoreError.stack : String(restoreError);
-      console.error(restoreMessage);
+    const restoreResult = restoreTags(previousLatest, previousCandidate);
+    if (!restoreResult.ok) {
+      const details = restoreResult.failures.map(f => `  - ${f.tag} -> ${f.target}: ${f.error}`).join('\n');
+      throw new Error(
+        `promote failed (${error.message}) AND rollback failed; registry is in an inconsistent state and requires manual recovery:\n${details}`
+      );
     }
     throw error;
   }
