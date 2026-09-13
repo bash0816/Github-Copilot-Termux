@@ -38,7 +38,18 @@
 
 - Blocker 1(コマンドインジェクション)・Blocker 2(任意ref publish): **修正完了**(commit 85c8ac9, PR#91, 2026-09-13)。
   G1(review_out_copilot_g1_fix_v1.txt)・G3(review_out_copilot_g3.txt)ともGo。
-- Blocker 3〜8(権限分離・PAT最小化・retag原子性・監査済み版検証・PR再検証・action SHA固定): **未着手**、後続タスク。
+- Blocker 5(retagロールバック非原子的)・Blocker 6(監査済み版検証不足)・Blocker 7(PR内容再検証不足)・
+  Blocker 8(mutable action tag): **修正完了**(commit d15a0e6, PR#93, 2026-09-13)。
+  G1はv1〜v4の4回のやり取りを経てGo(review_out_copilot_g1_fix_v4.txt)、
+  Blocker7はG3で追加指摘を受けさらに強化(review_out_copilot_g3_blocker7_v2.txtで最終Go)。
+  retag-latest-dist-tags.jsのrestoreTags()を依存性注入・戻り値ベースに変更、新規テスト
+  scripts/retag-latest-dist-tags.test.js追加。admin merge前にPR head時点のmanifestを
+  origin/mainと比較し、許可フィールド以外の変更を拒否するロジックを追加(publish/retag両方)。
+- Blocker 3(NPM_TOKENと書込み可能GITHUB_TOKENの混在、job権限分離): **未着手**。設計規模が大きい
+  (publish jobをnpm-publish専用jobとmanifest更新専用jobに分割する必要がある)ため後続タスクとして
+  保留。
+- Blocker 4(RELEASE_ADMIN_PATの権限過大): **未着手**。コード変更では完結せず、fine-grained PAT/
+  GitHub Appへの切り替えというユーザー側のGitHub UI操作が必要。
 
 ### 経緯・関連
 
