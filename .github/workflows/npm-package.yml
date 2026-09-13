@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
 
@@ -69,9 +69,9 @@ jobs:
       cancel-in-progress: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -87,6 +87,12 @@ jobs:
             }
             if (retagLatest && !process.env.PREVIOUS_AUDITED_VERSION) {
               throw new Error('previous_audited_version is required when retag_latest is true');
+            }
+            if (retagLatest) {
+              const manifest = require('./packages/copilot-termux/config/copilot-termux-release-manifest.json');
+              if (process.env.PREVIOUS_AUDITED_VERSION !== manifest.latest_audited_version) {
+                throw new Error('previous_audited_version (' + process.env.PREVIOUS_AUDITED_VERSION + ') does not match manifest latest_audited_version (' + manifest.latest_audited_version + ')');
+              }
             }
           "
           echo "Validation passed"
@@ -198,6 +204,41 @@ jobs:
             echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
+          changed_files=$(gh pr diff "$pr_number" --name-only)
+          if [ "$changed_files" != "packages/copilot-termux/config/copilot-termux-release-manifest.json" ]; then
+            echo "ERROR: PR contains unexpected file changes: $changed_files" >&2
+            exit 1
+          fi
+          pr_manifest_candidate=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest_candidate_version")
+          VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
+          if [ "$pr_manifest_candidate" != "$VERSION" ]; then
+            echo "ERROR: PR manifest latest_candidate_version ($pr_manifest_candidate) does not match expected version ($VERSION)" >&2
+            exit 1
+          fi
+          pr_manifest_state=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).candidate_state")
+          if [ "$pr_manifest_state" != "published" ]; then
+            echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'published'" >&2
+            exit 1
+          fi
+          git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
+          git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
+          ALLOWED_MANIFEST_KEYS="latest_candidate_version,candidate_state,last_updated" node -e "
+            const fs = require('fs');
+            const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
+            const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
+            const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
+            const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
+            const changed = [];
+            for (const key of allKeys) {
+              if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
+                changed.push(key);
+              }
+            }
+            const disallowed = changed.filter(k => !allowed.has(k));
+            if (disallowed.length > 0) {
+              throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
+            }
+          "
           gh pr merge "$pr_number" --admin --squash --delete-branch
 
       - name: Check retag already applied
@@ -296,6 +337,7 @@ jobs:
         if: ${{ fromJSON(inputs.retag_latest) }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
@@ -314,4 +356,38 @@ jobs:
             echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
+          changed_files=$(gh pr diff "$pr_number" --name-only)
+          if [ "$changed_files" != "packages/copilot-termux/config/copilot-termux-release-manifest.json" ]; then
+            echo "ERROR: PR contains unexpected file changes: $changed_files" >&2
+            exit 1
+          fi
+          pr_manifest_prev_stable=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).previous_stable_version")
+          if [ "$pr_manifest_prev_stable" != "$PREVIOUS_AUDITED_VERSION" ]; then
+            echo "ERROR: PR manifest previous_stable_version ($pr_manifest_prev_stable) does not match input previous_audited_version" >&2
+            exit 1
+          fi
+          pr_manifest_state=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).candidate_state")
+          if [ "$pr_manifest_state" != "promoted" ]; then
+            echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'promoted'" >&2
+            exit 1
+          fi
+          git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
+          git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
+          ALLOWED_MANIFEST_KEYS="previous_stable_version,latest_audited_version,latest_candidate_version,candidate_state,last_updated" node -e "
+            const fs = require('fs');
+            const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
+            const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
+            const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
+            const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
+            const changed = [];
+            for (const key of allKeys) {
+              if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
+                changed.push(key);
+              }
+            }
+            const disallowed = changed.filter(k => !allowed.has(k));
+            if (disallowed.length > 0) {
+              throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
+            }
+          "
           gh pr merge "$pr_number" --admin --squash --delete-branch
