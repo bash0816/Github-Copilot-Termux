@@ -58,7 +58,7 @@ jobs:
 
   publish:
     needs: verify
-    if: ${{ fromJSON(inputs.publish) || fromJSON(inputs.retag_latest) }}
+    if: ${{ (fromJSON(inputs.publish) || fromJSON(inputs.retag_latest)) && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04-arm
     environment: npm-publish
     permissions:
@@ -203,6 +203,8 @@ jobs:
       - name: Check retag already applied
         if: ${{ fromJSON(inputs.retag_latest) }}
         id: retag_check
+        env:
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
         run: |
           set -euo pipefail
           PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
@@ -210,7 +212,7 @@ jobs:
           expected_candidate=$(node -p "require('./$MANIFEST').latest_candidate_version")
           current_latest=$(npm view "$PACKAGE_NAME" dist-tags.latest 2>/dev/null || echo "")
           current_candidate=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
-          if [ "$current_latest" = "$expected_candidate" ] && [ "$current_candidate" = "${{ inputs.previous_audited_version }}" ]; then
+          if [ "$current_latest" = "$expected_candidate" ] && [ "$current_candidate" = "$PREVIOUS_AUDITED_VERSION" ]; then
             echo "already_retagged=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_retagged=false" >> "$GITHUB_OUTPUT"
@@ -227,6 +229,7 @@ jobs:
         if: ${{ fromJSON(inputs.retag_latest) }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
         run: |
           set -euo pipefail
           VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
@@ -258,7 +261,7 @@ jobs:
             git checkout -B "$branch" origin/main
           fi
 
-          MANIFEST_ENV="$MANIFEST" PREVIOUS_AUDITED_VERSION_ENV="${{ inputs.previous_audited_version }}" CANDIDATE_ENV="$CANDIDATE" NEW_CANDIDATE_ENV="$NEW_CANDIDATE" node -e "
+          MANIFEST_ENV="$MANIFEST" PREVIOUS_AUDITED_VERSION_ENV="$PREVIOUS_AUDITED_VERSION" CANDIDATE_ENV="$CANDIDATE" NEW_CANDIDATE_ENV="$NEW_CANDIDATE" node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
             m.previous_stable_version = process.env.PREVIOUS_AUDITED_VERSION_ENV;
