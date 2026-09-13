@@ -36,7 +36,9 @@
 
 ### 対応状況
 
-未着手。修正はユーザー合意の優先順位に従って段階的に実施予定。
+- Blocker 1(コマンドインジェクション)・Blocker 2(任意ref publish): **修正完了**(commit 85c8ac9, PR#91, 2026-09-13)。
+  G1(review_out_copilot_g1_fix_v1.txt)・G3(review_out_copilot_g3.txt)ともGo。
+- Blocker 3〜8(権限分離・PAT最小化・retag原子性・監査済み版検証・PR再検証・action SHA固定): **未着手**、後続タスク。
 
 ### 経緯・関連
 
