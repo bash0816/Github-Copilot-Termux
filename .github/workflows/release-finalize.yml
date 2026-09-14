@@ -180,7 +180,7 @@ jobs:
               process.stdin.on('data', c => chunks.push(c));
               process.stdin.on('end', () => {
                 const buf = Buffer.concat(chunks);
-                const parts = buf.toString('utf8').split(' ').filter(p => p.length > 0);
+                const parts = buf.toString('utf8').split('\0').filter(p => p.length > 0);
                 if (parts.length % 2 !== 0 || parts.length === 0) {
                   console.error('Unexpected diff output format');
                   process.exit(1);
