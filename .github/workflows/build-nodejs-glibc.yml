@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$NODE_VERSION"
-          curl -fsSL "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz" -o node.tar.xz
+          curl -fsSL "https://nodejs.org/dist/v${VERSION}/node-v${VERSION}.tar.xz" -o "node-v${VERSION}.tar.xz"
           curl -fsSL "https://nodejs.org/dist/v${VERSION}/SHASUMS256.txt" -o SHASUMS256.txt
           match_count=$(grep -Fc " node-v${VERSION}.tar.xz" SHASUMS256.txt || true)
           if [ "$match_count" -ne 1 ]; then
@@ -64,7 +64,7 @@ jobs:
           fi
           grep -F " node-v${VERSION}.tar.xz" SHASUMS256.txt > expected.sha256
           sha256sum -c expected.sha256
-          tar -xf node.tar.xz
+          tar -xf "node-v${VERSION}.tar.xz"
           mv "node-v${VERSION}" node-src
 
       - name: Configure Node.js
