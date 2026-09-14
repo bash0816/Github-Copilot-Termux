@@ -21,6 +21,8 @@ jobs:
       WATCH_FAILURE_ISSUE_TITLE: "⚠️ Copilot version watch failed"
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -79,18 +81,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Update manifest and package.json
+        id: update_manifest
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
 
+          # Calculate expected_last_updated once and reuse
+          expected_last_updated="$(node -e 'process.stdout.write(new Date().toISOString().slice(0, 10))')"
+
           # Update copilot-termux-release-manifest.json
           MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
-          MANIFEST_ENV="$MANIFEST" NEW_VERSION_ENV="$NEW_VERSION" node -e "
+          MANIFEST_ENV="$MANIFEST" NEW_VERSION_ENV="$NEW_VERSION" LAST_UPDATED_ENV="$expected_last_updated" node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync(process.env.MANIFEST_ENV, 'utf8'));
             m.copilot_version = process.env.NEW_VERSION_ENV;
-            m.last_updated = new Date().toISOString().slice(0,10);
+            m.last_updated = process.env.LAST_UPDATED_ENV;
             m.candidate_state = 'none';
             m.canonical_package_status = 'not_published';
             m.latest_candidate_version = null;
@@ -123,6 +129,7 @@ jobs:
           echo "Updated config/manifest.json: version=$NEW_VERSION"
 
           echo "Updated manifest and package.json to version: $NEW_VERSION"
+          printf 'expected_last_updated=%s\n' "$expected_last_updated" >> "$GITHUB_OUTPUT"
       - name: Analyze NAPI exports for new version
         id: napi_audit
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
@@ -315,6 +322,20 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
         run: |
           set -euo pipefail
+
+          post_review_comment() {
+            local pr="$1"
+            local reason="$2"
+            local marker="<!-- copilot-watch-review-reason:${reason} -->"
+            local existing
+            existing=$(gh pr view "$pr" --json comments --jq '.comments[].body' | grep -Fqx "$marker" && echo "found" || echo "")
+            if [ -z "$existing" ]; then
+              gh pr comment "$pr" --body "${marker}
+          自動マージをスキップしました(reason=${reason})。要人間レビュー: docs/operations/platform-patch-update-guide.md に従いbehavioral stub実装確認後にマージしてください。マージ後は手動でnpm-package.ymlをdispatchしてください。"
+            fi
+            echo "Manifest PR #${pr} left open for human review (reason=${reason})"
+          }
+
           pr_number="${{ steps.pr_create.outputs.pr_number }}"
           safe_merge="${{ steps.safe_merge_decision.outputs.safe_merge }}"
           safe_merge_reason="${{ steps.safe_merge_decision.outputs.safe_merge_reason }}"
@@ -330,19 +351,33 @@ jobs:
 
           if [ "$safe_merge" = "true" ]; then
             branch="${{ steps.commit_branch.outputs.branch }}"
-            git fetch origin main "$branch"
             pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
-            if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+            git fetch origin main "$branch" "$pr_head_sha"
+            pr_head_sha_recheck=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+            if [ "$pr_head_sha" != "$pr_head_sha_recheck" ]; then
+              echo "ERROR: PR head changed during fetch/validation window. Aborting to avoid validating a stale commit." >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
               echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
               exit 1
             fi
-            gh pr merge "$pr_number" --admin --squash --delete-branch
-            echo "safe_merged=true" >> "$GITHUB_OUTPUT"
-            echo "Manifest PR #${pr_number} merged (admin bypass, reason=$safe_merge_reason)"
+
+            validation_json=$(PR_HEAD_SHA="$pr_head_sha_recheck" NEW_VERSION="${{ steps.check_version.outputs.new_version }}" EXPECTED_LAST_UPDATED="${{ steps.update_manifest.outputs.expected_last_updated }}" node scripts/napi-watch-merge-validate.js)
+            validated_safe_merge=$(echo "$validation_json" | node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(0,'utf8')).safeMerge))")
+            validated_reason=$(echo "$validation_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).reason)")
+
+            if [ "$validated_safe_merge" = "true" ]; then
+              gh pr merge "$pr_number" --admin --squash --delete-branch --match-head-commit "$pr_head_sha_recheck"
+              echo "safe_merged=true" >> "$GITHUB_OUTPUT"
+              echo "Manifest PR #${pr_number} merged (admin bypass, reason=$validated_reason)"
+            else
+              echo "safe_merged=false" >> "$GITHUB_OUTPUT"
+              post_review_comment "$pr_number" "$validated_reason"
+            fi
           else
             echo "safe_merged=false" >> "$GITHUB_OUTPUT"
-            gh pr comment "$pr_number" --body "自動マージをスキップしました(reason=$safe_merge_reason)。要人間レビュー: docs/operations/platform-patch-update-guide.md に従いbehavioral stub実装確認後にマージしてください。マージ後は手動でnpm-package.ymlをdispatchしてください。"
-            echo "Manifest PR #${pr_number} left open for human review (reason=$safe_merge_reason)"
+            post_review_comment "$pr_number" "$safe_merge_reason"
           fi
       - name: Dispatch npm-package verify
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.safe_merge.outputs.safe_merged == 'true'
