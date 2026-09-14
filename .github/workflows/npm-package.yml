@@ -265,49 +265,111 @@ jobs:
             exit 1
           fi
           pr_number="${{ steps.manifest_publish_pr.outputs.pr_number }}"
-          branch="${{ steps.manifest_publish_pr.outputs.branch }}"
-          git fetch origin main "$branch"
+          expected_branch="${{ steps.manifest_publish_pr.outputs.branch }}"
+
+          verify_pr_state() {
+            local sha="$1"
+            local pr_json
+            pr_json=$(gh pr view "$pr_number" --json state,baseRefName,headRefName,headRepositoryOwner,headRefOid)
+            local state base head_ref head_owner head_sha
+            state=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).state)")
+            base=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).baseRefName)")
+            head_ref=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRefName)")
+            head_owner=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRepositoryOwner.login)")
+            head_sha=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRefOid)")
+            if [ "$state" != "OPEN" ] || [ "$base" != "main" ] || [ "$head_ref" != "$expected_branch" ] || [ "$head_owner" != "bash0816" ] || [ "$head_sha" != "$sha" ]; then
+              echo "ERROR: PR #${pr_number} identity check failed (state=$state base=$base head_ref=$head_ref head_owner=$head_owner head_sha=$head_sha expected_sha=$sha)" >&2
+              return 1
+            fi
+            return 0
+          }
+
+          verify_file_scope() {
+            local sha="$1"
+            git diff --name-status -z --no-renames origin/main "$sha" | node -e "
+              const chunks = [];
+              process.stdin.on('data', c => chunks.push(c));
+              process.stdin.on('end', () => {
+                const buf = Buffer.concat(chunks);
+                const parts = buf.toString('utf8').split('\0').filter(p => p.length > 0);
+                if (parts.length % 2 !== 0 || parts.length === 0) {
+                  console.error('Unexpected diff output format');
+                  process.exit(1);
+                }
+                const entries = [];
+                for (let i = 0; i < parts.length; i += 2) {
+                  entries.push({ status: parts[i], path: parts[i + 1] });
+                }
+                const allowed = entries.every(e => (e.status === 'A' || e.status === 'M') && e.path === 'packages/copilot-termux/config/copilot-termux-release-manifest.json');
+                if (!allowed) {
+                  console.error('Disallowed diff:', JSON.stringify(entries));
+                  process.exit(1);
+                }
+                console.log('File scope OK:', JSON.stringify(entries));
+              });
+            "
+          }
+
+          verify_manifest_fields() {
+            local sha="$1"
+            git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
+            git show "${sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
+            pr_manifest_candidate=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/manifest_head.json','utf8')).latest_candidate_version")
+            VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
+            if [ "$pr_manifest_candidate" != "$VERSION" ]; then
+              echo "ERROR: PR manifest latest_candidate_version ($pr_manifest_candidate) does not match expected version ($VERSION)" >&2
+              exit 1
+            fi
+            pr_manifest_state=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/manifest_head.json','utf8')).candidate_state")
+            if [ "$pr_manifest_state" != "published" ]; then
+              echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'published'" >&2
+              exit 1
+            fi
+            ALLOWED_MANIFEST_KEYS="latest_candidate_version,candidate_state,last_updated" node -e "
+              const fs = require('fs');
+              const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
+              const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
+              const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
+              const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
+              const changed = [];
+              for (const key of allKeys) {
+                if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
+                  changed.push(key);
+                }
+              }
+              const disallowed = changed.filter(k => !allowed.has(k));
+              if (disallowed.length > 0) {
+                throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
+              }
+            "
+          }
+
           pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
-          if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+          git fetch origin main "$expected_branch" "$pr_head_sha"
+          pr_head_sha_recheck=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          if [ "$pr_head_sha" != "$pr_head_sha_recheck" ]; then
+            echo "ERROR: PR head changed during fetch/validation window. Aborting to avoid validating a stale commit." >&2
+            exit 1
+          fi
+          verify_pr_state "$pr_head_sha_recheck" || exit 1
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
             echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
-          changed_files=$(gh pr diff "$pr_number" --name-only)
-          if [ "$changed_files" != "packages/copilot-termux/config/copilot-termux-release-manifest.json" ]; then
-            echo "ERROR: PR contains unexpected file changes: $changed_files" >&2
+          verify_file_scope "$pr_head_sha_recheck"
+          verify_manifest_fields "$pr_head_sha_recheck"
+
+          # Re-fetch origin/main immediately before merge and re-verify against the freshest base
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
+            echo "ERROR: PR head does not include latest origin/main (post-refresh). Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
-          pr_manifest_candidate=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest_candidate_version")
-          VERSION=$(node -p "require('./packages/copilot-termux/package.json').version")
-          if [ "$pr_manifest_candidate" != "$VERSION" ]; then
-            echo "ERROR: PR manifest latest_candidate_version ($pr_manifest_candidate) does not match expected version ($VERSION)" >&2
-            exit 1
-          fi
-          pr_manifest_state=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).candidate_state")
-          if [ "$pr_manifest_state" != "published" ]; then
-            echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'published'" >&2
-            exit 1
-          fi
-          git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
-          git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
-          ALLOWED_MANIFEST_KEYS="latest_candidate_version,candidate_state,last_updated" node -e "
-            const fs = require('fs');
-            const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
-            const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
-            const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
-            const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
-            const changed = [];
-            for (const key of allKeys) {
-              if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
-                changed.push(key);
-              }
-            }
-            const disallowed = changed.filter(k => !allowed.has(k));
-            if (disallowed.length > 0) {
-              throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
-            }
-          "
-          gh pr merge "$pr_number" --admin --squash --delete-branch
+          verify_file_scope "$pr_head_sha_recheck"
+          verify_manifest_fields "$pr_head_sha_recheck"
+          verify_pr_state "$pr_head_sha_recheck" || exit 1
+
+          gh pr merge "$pr_number" --admin --squash --delete-branch --match-head-commit "$pr_head_sha_recheck"
 
       - name: Update manifest (retag)
         if: ${{ fromJSON(inputs.retag_latest) }}
@@ -393,48 +455,110 @@ jobs:
             exit 1
           fi
           pr_number="${{ steps.manifest_retag_pr.outputs.pr_number }}"
-          branch="${{ steps.manifest_retag_pr.outputs.branch }}"
-          git fetch origin main "$branch"
+          expected_branch="${{ steps.manifest_retag_pr.outputs.branch }}"
+
+          verify_pr_state() {
+            local sha="$1"
+            local pr_json
+            pr_json=$(gh pr view "$pr_number" --json state,baseRefName,headRefName,headRepositoryOwner,headRefOid)
+            local state base head_ref head_owner head_sha
+            state=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).state)")
+            base=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).baseRefName)")
+            head_ref=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRefName)")
+            head_owner=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRepositoryOwner.login)")
+            head_sha=$(echo "$pr_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).headRefOid)")
+            if [ "$state" != "OPEN" ] || [ "$base" != "main" ] || [ "$head_ref" != "$expected_branch" ] || [ "$head_owner" != "bash0816" ] || [ "$head_sha" != "$sha" ]; then
+              echo "ERROR: PR #${pr_number} identity check failed (state=$state base=$base head_ref=$head_ref head_owner=$head_owner head_sha=$head_sha expected_sha=$sha)" >&2
+              return 1
+            fi
+            return 0
+          }
+
+          verify_file_scope() {
+            local sha="$1"
+            git diff --name-status -z --no-renames origin/main "$sha" | node -e "
+              const chunks = [];
+              process.stdin.on('data', c => chunks.push(c));
+              process.stdin.on('end', () => {
+                const buf = Buffer.concat(chunks);
+                const parts = buf.toString('utf8').split('\0').filter(p => p.length > 0);
+                if (parts.length % 2 !== 0 || parts.length === 0) {
+                  console.error('Unexpected diff output format');
+                  process.exit(1);
+                }
+                const entries = [];
+                for (let i = 0; i < parts.length; i += 2) {
+                  entries.push({ status: parts[i], path: parts[i + 1] });
+                }
+                const allowed = entries.every(e => (e.status === 'A' || e.status === 'M') && e.path === 'packages/copilot-termux/config/copilot-termux-release-manifest.json');
+                if (!allowed) {
+                  console.error('Disallowed diff:', JSON.stringify(entries));
+                  process.exit(1);
+                }
+                console.log('File scope OK:', JSON.stringify(entries));
+              });
+            "
+          }
+
+          verify_manifest_fields() {
+            local sha="$1"
+            git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
+            git show "${sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
+            pr_manifest_prev_stable=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/manifest_head.json','utf8')).previous_stable_version")
+            if [ "$pr_manifest_prev_stable" != "$PREVIOUS_AUDITED_VERSION" ]; then
+              echo "ERROR: PR manifest previous_stable_version ($pr_manifest_prev_stable) does not match input previous_audited_version" >&2
+              exit 1
+            fi
+            pr_manifest_state=$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/manifest_head.json','utf8')).candidate_state")
+            if [ "$pr_manifest_state" != "promoted" ]; then
+              echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'promoted'" >&2
+              exit 1
+            fi
+            ALLOWED_MANIFEST_KEYS="previous_stable_version,latest_audited_version,latest_candidate_version,candidate_state,last_updated" node -e "
+              const fs = require('fs');
+              const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
+              const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
+              const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
+              const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
+              const changed = [];
+              for (const key of allKeys) {
+                if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
+                  changed.push(key);
+                }
+              }
+              const disallowed = changed.filter(k => !allowed.has(k));
+              if (disallowed.length > 0) {
+                throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
+              }
+            "
+          }
+
           pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
-          if ! git merge-base --is-ancestor origin/main "$pr_head_sha"; then
+          git fetch origin main "$expected_branch" "$pr_head_sha"
+          pr_head_sha_recheck=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
+          if [ "$pr_head_sha" != "$pr_head_sha_recheck" ]; then
+            echo "ERROR: PR head changed during fetch/validation window. Aborting to avoid validating a stale commit." >&2
+            exit 1
+          fi
+          verify_pr_state "$pr_head_sha_recheck" || exit 1
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
             echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
-          changed_files=$(gh pr diff "$pr_number" --name-only)
-          if [ "$changed_files" != "packages/copilot-termux/config/copilot-termux-release-manifest.json" ]; then
-            echo "ERROR: PR contains unexpected file changes: $changed_files" >&2
+          verify_file_scope "$pr_head_sha_recheck"
+          verify_manifest_fields "$pr_head_sha_recheck"
+
+          # Re-fetch origin/main immediately before merge and re-verify against the freshest base
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
+            echo "ERROR: PR head does not include latest origin/main (post-refresh). Refusing to admin-merge to avoid rollback." >&2
             exit 1
           fi
-          pr_manifest_prev_stable=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).previous_stable_version")
-          if [ "$pr_manifest_prev_stable" != "$PREVIOUS_AUDITED_VERSION" ]; then
-            echo "ERROR: PR manifest previous_stable_version ($pr_manifest_prev_stable) does not match input previous_audited_version" >&2
-            exit 1
-          fi
-          pr_manifest_state=$(git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).candidate_state")
-          if [ "$pr_manifest_state" != "promoted" ]; then
-            echo "ERROR: PR manifest candidate_state ($pr_manifest_state) is not 'promoted'" >&2
-            exit 1
-          fi
-          git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_base.json"
-          git show "${pr_head_sha}:packages/copilot-termux/config/copilot-termux-release-manifest.json" > "$RUNNER_TEMP/manifest_head.json"
-          ALLOWED_MANIFEST_KEYS="previous_stable_version,latest_audited_version,latest_candidate_version,candidate_state,last_updated" node -e "
-            const fs = require('fs');
-            const base = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_base.json', 'utf8'));
-            const head = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/manifest_head.json', 'utf8'));
-            const allowed = new Set(process.env.ALLOWED_MANIFEST_KEYS.split(','));
-            const allKeys = new Set([...Object.keys(base), ...Object.keys(head)]);
-            const changed = [];
-            for (const key of allKeys) {
-              if (JSON.stringify(base[key]) !== JSON.stringify(head[key])) {
-                changed.push(key);
-              }
-            }
-            const disallowed = changed.filter(k => !allowed.has(k));
-            if (disallowed.length > 0) {
-              throw new Error('Unexpected manifest field changes: ' + disallowed.join(', '));
-            }
-          "
-          gh pr merge "$pr_number" --admin --squash --delete-branch
+          verify_file_scope "$pr_head_sha_recheck"
+          verify_manifest_fields "$pr_head_sha_recheck"
+          verify_pr_state "$pr_head_sha_recheck" || exit 1
+
+          gh pr merge "$pr_number" --admin --squash --delete-branch --match-head-commit "$pr_head_sha_recheck"
           git fetch origin main
           promoted_version=$(git show "origin/main:packages/copilot-termux/config/copilot-termux-release-manifest.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest_audited_version")
           npm_latest=$(npm view "$(node -p "require('./packages/copilot-termux/package.json').name")" dist-tags.latest 2>/dev/null || echo "")
