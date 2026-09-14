@@ -16,6 +16,13 @@ on:
         type: string
         default: ''
 
+permissions:
+  contents: read
+
+concurrency:
+  group: copilot-manifest-write
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-24.04-arm
@@ -79,21 +86,18 @@ jobs:
           "
           echo "Pre-approval validation passed"
 
-  publish:
+  publish-npm:
     needs: verify
     if: ${{ (fromJSON(inputs.publish) || fromJSON(inputs.retag_latest)) && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04-arm
     environment: npm-publish
     permissions:
-      contents: write
-      pull-requests: write
-      actions: write
-    concurrency:
-      group: copilot-manifest-write
-      cancel-in-progress: false
+      contents: read
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -148,6 +152,46 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Check retag already applied
+        if: ${{ fromJSON(inputs.retag_latest) }}
+        id: retag_check
+        env:
+          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
+          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
+          expected_candidate=$(node -p "require('./$MANIFEST').latest_candidate_version")
+          current_latest=$(npm view "$PACKAGE_NAME" dist-tags.latest 2>/dev/null || echo "")
+          current_candidate=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
+          if [ "$current_latest" = "$expected_candidate" ] && [ "$current_candidate" = "$PREVIOUS_AUDITED_VERSION" ]; then
+            echo "already_retagged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_retagged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Retag latest
+        if: ${{ fromJSON(inputs.retag_latest) && steps.retag_check.outputs.already_retagged != 'true' }}
+        run: node scripts/retag-latest-dist-tags.js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          COPILOT_TERMUX_EXPECTED_PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
+
+  update-manifest:
+    needs: publish-npm
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
 
       - name: Update manifest (publish)
         if: ${{ fromJSON(inputs.publish) }}
@@ -264,31 +308,6 @@ jobs:
             }
           "
           gh pr merge "$pr_number" --admin --squash --delete-branch
-
-      - name: Check retag already applied
-        if: ${{ fromJSON(inputs.retag_latest) }}
-        id: retag_check
-        env:
-          PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
-        run: |
-          set -euo pipefail
-          PACKAGE_NAME=$(node -p "require('./packages/copilot-termux/package.json').name")
-          MANIFEST="packages/copilot-termux/config/copilot-termux-release-manifest.json"
-          expected_candidate=$(node -p "require('./$MANIFEST').latest_candidate_version")
-          current_latest=$(npm view "$PACKAGE_NAME" dist-tags.latest 2>/dev/null || echo "")
-          current_candidate=$(npm view "$PACKAGE_NAME" dist-tags.candidate 2>/dev/null || echo "")
-          if [ "$current_latest" = "$expected_candidate" ] && [ "$current_candidate" = "$PREVIOUS_AUDITED_VERSION" ]; then
-            echo "already_retagged=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already_retagged=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Retag latest
-        if: ${{ fromJSON(inputs.retag_latest) && steps.retag_check.outputs.already_retagged != 'true' }}
-        run: node scripts/retag-latest-dist-tags.js
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          COPILOT_TERMUX_EXPECTED_PREVIOUS_AUDITED_VERSION: ${{ inputs.previous_audited_version }}
 
       - name: Update manifest (retag)
         if: ${{ fromJSON(inputs.retag_latest) }}
