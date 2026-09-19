@@ -10,6 +10,6 @@
   "public_distribution_status": "staged",
   "nodejs_glibc_version": "node-glibc-v24.15.0",
   "build_run_id": null,
-  "last_updated": "2026-09-18",
+  "last_updated": "2026-09-19",
   "manifest_url": "https://raw.githubusercontent.com/bash0816/Github-Copilot-Termux/main/packages/copilot-termux/config/copilot-termux-release-manifest.json"
 }
