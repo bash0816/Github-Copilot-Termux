@@ -2,8 +2,8 @@
   "wrapperVersion": "2.0.0",
   "copilot": {
     "package": "@github/copilot-linuxmusl-arm64",
-    "version": "1.0.86",
-    "integrity": "sha512-JcUBGRDgoIa97pudDCfNPUsKpLwpymWf0nWaVlDiKp4U7NW4BD6AGehlsYsOOcUL6b4IooApQ6XDwjOlg/PYvw=="
+    "version": "1.0.87",
+    "integrity": "sha512-vsZdL6fBCqHFVtFUnAttMXNchC1Zi6CI8e14j6p8gzIFWfanotMgd5Zg2hP2ng5kfvO7BbFVYdM+vdp/HvQICw=="
   },
   "glibcNode": {
     "version": "26.2.0",
