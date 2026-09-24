@@ -34,18 +34,6 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Verify bionic-compat.so
-        run: |
-          set -euo pipefail
-          SO=packages/copilot-termux/lib/bionic-compat.so
-          [ -f "$SO" ] || { echo "ERROR: bionic-compat.so missing"; exit 1; }
-          readelf -h "$SO" | grep -q 'AArch64' || { echo "ERROR: not AArch64 ELF"; exit 1; }
-          for sym in bcmp sdallocx __errno_location __xpg_strerror_r; do
-            nm -D "$SO" | grep -qP "^[0-9a-f]+ T ${sym}$" || { echo "ERROR: Bionic symbol ${sym} not found"; exit 1; }
-          done
-          echo "bionic-compat.so: AArch64 + Bionic symbols OK"
-          file "$SO"
-
       - name: Pack npm tarball
         run: |
           set -euo pipefail
@@ -58,8 +46,6 @@ jobs:
       - name: Verify tarball contents
         run: |
           set -euo pipefail
-          tar -tzf "$TARBALL" | grep -Fx 'package/lib/bionic-compat.so' || { echo "ERROR: bionic-compat.so not in tarball"; exit 1; }
-          tar -tzf "$TARBALL" | grep -Fx 'package/scripts/bionic-compat.c' || { echo "ERROR: bionic-compat.c not in tarball"; exit 1; }
           tar -tzf "$TARBALL" | grep -Fx 'package/lib/setup.js' || { echo "ERROR: setup.js not in tarball"; exit 1; }
           echo "Tarball contents OK"
 

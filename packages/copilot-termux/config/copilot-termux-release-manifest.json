@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "package_name": "@bash0816/copilot-termux",
-  "copilot_version": "1.0.86",
+  "copilot_version": "1.0.88",
   "latest_audited_version": "1.0.83",
   "latest_candidate_version": null,
   "previous_stable_version": "1.0.82",

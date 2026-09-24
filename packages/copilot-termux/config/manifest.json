@@ -1,12 +1,8 @@
 {
   "wrapperVersion": "2.0.0",
   "copilot": {
-    "package": "@github/copilot-linuxmusl-arm64",
-    "version": "1.0.86",
-    "integrity": "sha512-JcUBGRDgoIa97pudDCfNPUsKpLwpymWf0nWaVlDiKp4U7NW4BD6AGehlsYsOOcUL6b4IooApQ6XDwjOlg/PYvw=="
-  },
-  "glibcNode": {
-    "version": "26.2.0",
-    "sha256": "bf52461d25017479cdc549642c4e7a2303ac5c5395d7c3d026d5d8b3fa283c05"
+    "package": "@github/copilot-linux-arm64",
+    "version": "1.0.88",
+    "integrity": "sha512-aqtfMpA0B2cdKWydFXnlXawaqNRjG4gC5Dpe+sO/qVXQllSEi8moqiYzkUaVo4W5VEPwIXDLxCbDzsRw7Jt66w=="
   }
 }
