@@ -32,18 +32,16 @@
 
 1. `@github/copilot` の最新バージョンを npm registry から取得
 2. `packages/copilot-termux/config/copilot-termux-release-manifest.json` の `copilot_version` と比較
-3. 新バージョンが検知されたとき、以下のマニフェスト・ファイルを更新してブランチを作成し、PR化して即座にadmin bypass mergeを実行（条件満たす場合）:
+3. 新バージョンが検知されたとき、以下のマニフェスト・ファイルを更新してブランチを作成し、PR化する:
    - `packages/copilot-termux/config/copilot-termux-release-manifest.json`:
      - `copilot_version`: 新バージョン
      - `latest_candidate_version`: **`null` のまま保持**（publish 成功後のみ設定される）
      - `candidate_state`: `'none'`
    - `packages/copilot-termux/package.json`: `version` フィールド
    - `packages/copilot-termux/config/manifest.json`: `copilot.version` と `copilot.integrity`
-     - `copilot.integrity` は `npm view @github/copilot-linuxmusl-arm64@{version} dist.integrity` で取得
+     - `copilot.integrity` は `npm view @github/copilot-linux-arm64@{version} dist.integrity` で取得
      - **取得失敗時は ワークフロー全体が exit 1 で失敗** → GitHub Actions issue が自動起票される
-   - **PR作成**後、napi-audit が追加のレビュー必要判定（`newPendingGitAsync`・`newStreamRisk` が存在）した場合は PR をオープンなままで手動レビュー待ち、不要な場合は admin bypass で即座にマージ
-     - `newUnknown` は参考情報として issue 本文に表示されますが、判定には含まれません（issue #30）
-   - merge 後、`npm-package.yml` を dispatch（`publish=false`, `retag_latest=false`）
+   - **PR作成のみ**（自動マージは行わない、人間によるレビュー・マージが必要。NAPI監査による自動safe-mergeは撤去済み）
 
 **ログ確認**:
 
@@ -69,17 +67,11 @@ gh run view <RUN_ID> --log --repo bash0816/Github-Copilot-Termux
 
 **検証内容**:
 
-1. `bionic-compat.so` 存在確認
-   - AArch64 ELF バイナリ形式確認
-   - Bionic シンボル確認（`bcmp`, `sdallocx`, `__errno_location`, `__xpg_strerror_r`）
-
-2. npm tarball の生成確認
+1. npm tarball の生成確認
    - パッケージ化が正常に完了
 
-3. tarball 内容の検証
+2. tarball 内容の検証
    - 必須ファイルの包含確認
-     - `lib/bionic-compat.so`
-     - `scripts/bionic-compat.c`
      - `lib/setup.js`
 
 **ログ確認**:
@@ -90,9 +82,8 @@ gh run view <RUN_ID> --log --repo bash0816/Github-Copilot-Termux
 
 **verify 失敗時の対応**:
 
-- bionic-compat.so 破損: `lib/bionic-compat.so` を再ビルドし、git push
 - tarball 生成エラー: `packages/copilot-termux/package.json` の `files` フィールドが正しいか確認
-- AArch64 確認失敗: runner が ARM64 マシンであることを確認
+- tarball 内容の検証エラー: 必須ファイル（`lib/setup.js`）が含まれているか確認
 
 ---
 
@@ -492,7 +483,7 @@ LD_PRELOAD=$(npm list -g @bash0816/copilot-termux --depth=0 | grep copilot-termu
 
 ## GitHub Admin Bypass Merge の認証基盤（RELEASE_ADMIN_PAT）
 
-本リリースフロー（特に Step 1・Step 4・Step 6・Step 7 の自動マージ）では、main ブランチへの直接 push を避けるため、PR を作成してから admin bypass (`gh pr merge --admin`) で即座にマージしています。
+本リリースフロー（Step 4・Step 6・Step 7 の自動マージ）では、main ブランチへの直接 push を避けるため、PR を作成してから admin bypass (`gh pr merge --admin`) で即座にマージしています（Step 1 の copilot バージョン検知 PR は NAPI 監査撤去に伴い自動マージを行わず、PR 作成のみで人間のレビュー・マージ待ちとなります）。
 
 **RELEASE_ADMIN_PAT の役割**:
 

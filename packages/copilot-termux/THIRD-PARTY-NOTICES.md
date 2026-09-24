@@ -7,25 +7,15 @@ This package includes third-party software with the following licenses.
 ## GitHub Copilot CLI
 
 - Source: https://github.com/github/copilot-cli (private)
-- Version: 1.0.63
+- Package: @github/copilot-linux-arm64
 - License: GitHub Copilot CLI License
 - License text: THIRD-PARTY-LICENSES/COPILOT-LICENSE.md
 
-Redistributed in unmodified form as part of this package, in accordance with
-Section 2 of the GitHub Copilot CLI License.
-
-Files: lib/copilot/
-
----
-
-## Node.js
-
-- Source: https://nodejs.org/
-- License: MIT (main), with bundled components under various licenses
-  (see THIRD-PARTY-LICENSES/NODE-LICENSE.txt for full attribution)
-- License text: THIRD-PARTY-LICENSES/NODE-LICENSE.txt
-
-Files: lib/node
+Not bundled in this npm package. Downloaded in unmodified form at
+`copilot-termux setup` time from the npm registry, in accordance with
+Section 2 of the GitHub Copilot CLI License. The exact version fetched is
+pinned in `config/manifest.json` (`copilot.version`), and the downloaded
+binary is cached under `~/.copilot-termux/<version>/copilot`.
 
 ---
 
@@ -35,10 +25,11 @@ Files: lib/node
 - License: LGPL-2.1+
 - License text: THIRD-PARTY-LICENSES/LGPL-2.1.txt
 
-Files:
-  lib/glibc/ld-linux-aarch64.so.1
-  lib/glibc/libc.so.6
-  lib/glibc/libm.so.6
+Not bundled in this npm package. Copied at `copilot-termux setup` time from
+the system `glibc-repo` package (`pkg install glibc-repo && pkg install
+glibc`) into `~/.copilot-termux/glibc-wrap-libs/`:
+  ld-linux-aarch64.so.1
+  libc.so.6
 
 ---
 
@@ -49,18 +40,6 @@ Files:
 - Exception text: THIRD-PARTY-LICENSES/GCC-RUNTIME-EXCEPTION.txt
 - Base license text: THIRD-PARTY-LICENSES/GPL-3.0.txt
 
-Files:
-  lib/glibc/libgcc_s.so.1
-  lib/glibc/libstdc++.so.6
-
----
-
-## node-pty
-
-- Source: https://github.com/microsoft/node-pty
-- Version: 1.1.0
-- License: MIT
-- License text: THIRD-PARTY-LICENSES/NODE-PTY-LICENSE.txt
-
-Compiled natively for Android aarch64 (bionic) and bundled as `lib/native/pty.node`.
-Used to provide pseudo-terminal support for the interactive TUI mode of @github/copilot.
+Not bundled in this npm package. Copied at `copilot-termux setup` time from
+the system `glibc-repo` package into `~/.copilot-termux/glibc-wrap-libs/`:
+  libgcc_s.so.1

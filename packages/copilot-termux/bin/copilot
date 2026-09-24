@@ -7,9 +7,6 @@ while [ -L "${SELF}" ]; do
   case "${SELF}" in /*) ;; *) SELF="${DIR}/${SELF}" ;; esac
 done
 PACKAGE_DIR=$(CDPATH= cd -- "$(dirname -- "${SELF}")/.." && pwd)
-_COMPAT="${PACKAGE_DIR}/lib/bionic-compat.so"
-[ -f "${_COMPAT}" ] || { echo '[copilot-termux] ERROR: lib/bionic-compat.so missing. Reinstall package.' >&2; exit 1; }
-PRELOAD="${_COMPAT}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 if [ "${1:-}" = "update" ]; then
   shift
@@ -25,75 +22,32 @@ if [ ! -d "${CURRENT}" ]; then
   exit 1
 fi
 
-COPILOT_INDEX="${CURRENT}/index.js"
-if [ ! -f "${COPILOT_INDEX}" ]; then
+COPILOT_BIN="${CURRENT}/copilot"
+if [ ! -f "${COPILOT_BIN}" ]; then
   echo "[copilot-termux] Installation broken. Run: copilot-termux setup" >&2
   exit 1
 fi
 
-MXC_WRAP="${CACHE_DIR}/mxc-wrap"
-if [ -d "${MXC_WRAP}/arm64" ] && [ -x "${MXC_WRAP}/arm64/lxc-exec" ]; then
-  export MXC_BIN_DIR="${MXC_WRAP}"
-fi
-
-# glibc mode: glibc Node.js + glibc runtime.node + platform-patch.js (authManager* stubs still needed)
 _GLIBC_LD="${PREFIX}/glibc/lib/ld-linux-aarch64.so.1"
 _GLIBC_LIBS="${PREFIX}/glibc/lib"
-_GLIBC_RUNTIME="${CURRENT}/prebuilds/linux-arm64/runtime.node"
-_GLIBC_CLI_NATIVE="${CURRENT}/prebuilds/linux-arm64/cli-native.node"
-_GLIBC_NODE_AUTO="${CACHE_DIR}/glibc-node/node"
 
-_USE_GLIBC_NODE=""
-if [ -n "${MAGI_NODE:-}" ] && [ -x "${MAGI_NODE}" ]; then
-  _USE_GLIBC_NODE="${MAGI_NODE}"
-elif [ -x "${_GLIBC_NODE_AUTO}" ]; then
-  _USE_GLIBC_NODE="${_GLIBC_NODE_AUTO}"
-fi
-
-_GLIBC_READY=1
-[ -n "${_USE_GLIBC_NODE}" ] || _GLIBC_READY=0
-[ -f "${_GLIBC_RUNTIME}" ] || _GLIBC_READY=0
-[ -f "${_GLIBC_CLI_NATIVE}" ] || _GLIBC_READY=0
-[ -f "${_GLIBC_LD}" ] || _GLIBC_READY=0
-
-_GLIBC_ANY=0
-[ -n "${_USE_GLIBC_NODE}" ] && _GLIBC_ANY=1
-[ -f "${_GLIBC_RUNTIME}" ] && _GLIBC_ANY=1
-[ -f "${_GLIBC_CLI_NATIVE}" ] && _GLIBC_ANY=1
-[ -f "${_GLIBC_LD}" ] && _GLIBC_ANY=1
-
-if [ "${_GLIBC_READY}" = "1" ]; then
-  _SSL_CERT="${PREFIX}/etc/tls/cert.pem"
-  _SSL_CERT_DIR="${PREFIX}/etc/tls"
-  if [ ! -r "${_SSL_CERT}" ]; then
-    echo "[copilot-termux] ERROR: CA bundle not readable: ${_SSL_CERT}" >&2
-    echo "[copilot-termux] Run: pkg install ca-certificates" >&2
-    exit 1
-  fi
-  exec env LD_PRELOAD="" COPILOT_TERMUX_GLIBC_MODE=1 \
-    SSL_CERT_FILE="${_SSL_CERT}" \
-    SSL_CERT_DIR="${_SSL_CERT_DIR}" \
-    "${_GLIBC_LD}" --library-path "${_GLIBC_LIBS}" \
-    "${_USE_GLIBC_NODE}" \
-    --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-    "${COPILOT_INDEX}" \
-    "$@"
-elif [ "${_GLIBC_ANY}" = "1" ]; then
-  # 注: システムの glibc-repo パッケージ（_GLIBC_LD）を別目的で入れているだけで
-  # copilot-termux 自身の glibc mode セットアップ（setup.js の setupGlibcRuntime/setupGlibcNode）が
-  # 未完の場合も、ここでは「glibc mode 設定が部分的」としてエラー扱いにする。
-  # これは意図的な判断（Free auto mode の既知の壊れた bionic 経路への黙示的フォールバックを防ぐため）。
-  echo "[copilot-termux] ERROR: glibc mode partially configured. Missing:" >&2
-  [ -n "${_USE_GLIBC_NODE}" ] || echo "  - glibc node (${_GLIBC_NODE_AUTO})" >&2
-  [ -f "${_GLIBC_RUNTIME}" ] || echo "  - glibc runtime.node (${_GLIBC_RUNTIME})" >&2
-  [ -f "${_GLIBC_CLI_NATIVE}" ] || echo "  - glibc cli-native.node (${_GLIBC_CLI_NATIVE})" >&2
-  [ -f "${_GLIBC_LD}" ] || echo "  - glibc loader (${_GLIBC_LD})" >&2
-  echo "[copilot-termux] Run: copilot-termux setup" >&2
+if [ ! -f "${_GLIBC_LD}" ]; then
+  echo "[copilot-termux] ERROR: glibc not found. Please install: pkg install glibc-repo && pkg install glibc" >&2
   exit 1
 fi
 
-# bionic fallback（glibc関連ファイルが一つも無い場合のみ。意図的なbionic-onlyの正当な状態）
-LD_PRELOAD="${PRELOAD}" exec node \
-  --require "${PACKAGE_DIR}/lib/platform-patch.js" \
-  "${COPILOT_INDEX}" \
+_SSL_CERT="${PREFIX}/etc/tls/cert.pem"
+_SSL_CERT_DIR="${PREFIX}/etc/tls"
+if [ ! -r "${_SSL_CERT}" ]; then
+  echo "[copilot-termux] ERROR: CA bundle not readable: ${_SSL_CERT}" >&2
+  echo "[copilot-termux] Run: pkg install ca-certificates" >&2
+  exit 1
+fi
+
+exec env -u LD_PRELOAD \
+  SSL_CERT_FILE="${_SSL_CERT}" \
+  SSL_CERT_DIR="${_SSL_CERT_DIR}" \
+  COPILOT_TERMUX_GLIBC_MODE=1 \
+  "${_GLIBC_LD}" --library-path "${_GLIBC_LIBS}" \
+  "${COPILOT_BIN}" \
   "$@"

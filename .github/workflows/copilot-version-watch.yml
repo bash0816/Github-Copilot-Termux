@@ -115,14 +115,15 @@ jobs:
 
           # Update config/manifest.json (MANIFEST-002: setup.js が実際に読むファイル)
           SETUP_MANIFEST="packages/copilot-termux/config/manifest.json"
-          INTEGRITY=$(npm view "@github/copilot-linuxmusl-arm64@${NEW_VERSION}" dist.integrity 2>/dev/null | head -1)
+          INTEGRITY=$(npm view "@github/copilot-linux-arm64@${NEW_VERSION}" dist.integrity 2>/dev/null | head -1)
           if [ -z "$INTEGRITY" ]; then
-            echo "ERROR: Could not fetch integrity for @github/copilot-linuxmusl-arm64@${NEW_VERSION}"
+            echo "ERROR: Could not fetch integrity for @github/copilot-linux-arm64@${NEW_VERSION}"
             exit 1
           fi
           SETUP_MANIFEST_ENV="$SETUP_MANIFEST" NEW_VERSION_ENV="$NEW_VERSION" INTEGRITY_ENV="$INTEGRITY" node -e "
             const fs = require('fs');
             const m = JSON.parse(fs.readFileSync(process.env.SETUP_MANIFEST_ENV, 'utf8'));
+            m.copilot.package = '@github/copilot-linux-arm64';
             m.copilot.version = process.env.NEW_VERSION_ENV;
             m.copilot.integrity = process.env.INTEGRITY_ENV;
             fs.writeFileSync(process.env.SETUP_MANIFEST_ENV, JSON.stringify(m, null, 2) + '\n');
@@ -131,115 +132,6 @@ jobs:
 
           echo "Updated manifest and package.json to version: $NEW_VERSION"
           printf 'expected_last_updated=%s\n' "$expected_last_updated" >> "$GITHUB_OUTPUT"
-      - name: Analyze NAPI exports for new version
-        id: napi_audit
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
-          PACK_DIR="/tmp/copilot-pack"
-          mkdir -p "$PACK_DIR"
-
-          if ! TARBALL_NAME=$(npm pack "@github/copilot-linuxmusl-arm64@${NEW_VERSION}" --pack-destination "$PACK_DIR" | tail -n 1); then
-            echo "audit_skipped=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          TARBALL="$PACK_DIR/$TARBALL_NAME"
-          RUNTIME_RELATIVE=$(tar -tf "$TARBALL" | grep '/runtime.node$' | head -n 1 || true)
-          if [ -z "$RUNTIME_RELATIVE" ]; then
-            echo "audit_skipped=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          RUNTIME="$PACK_DIR/runtime.node"
-          tar -xOf "$TARBALL" "$RUNTIME_RELATIVE" > "$RUNTIME"
-
-          # 監査結果本体はGITHUB_OUTPUT/envに乗せず、ランナーローカルの一時ファイルに直接書く。
-          # (envブロック経由で渡すと、Actionsが自動的にログへ平文出力してしまうため。2026-07-19)
-          node scripts/napi-audit.js "$RUNTIME" "$NEW_VERSION" --auto-patch > "$RUNNER_TEMP/napi_audit_result.json"
-
-          # review_count/tokio_patch_ok/issue_needed の3値は、個別に
-          # `echo "x=$(node -e ...)"` で埋め込むと node 側の例外時に `set -e` が
-          # 発火せず値が空のまま後続処理へ流れてしまう(fail-open、2026-07-25判明)。
-          # node呼び出しを1回に集約し直接 $GITHUB_OUTPUT に書くことで、
-          # 例外時はこのコマンド自体が非ゼロ終了しset -eで止まる設計にする。
-          node -e "
-            const fs = require('fs');
-            const { isIssueNeeded } = require('./scripts/napi-issue-body.js');
-            const a = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/napi_audit_result.json', 'utf8'));
-            const reviewCount = a.newUnknown.length + a.newPendingGitAsync.length + a.newStreamRisk.length;
-            const lines = [
-              'review_count=' + reviewCount,
-              'tokio_patch_ok=' + a.tokioPatchOk,
-              'issue_needed=' + isIssueNeeded(a),
-            ];
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines.join('\n') + '\n');
-          "
-          echo "audit_skipped=false" >> "$GITHUB_OUTPUT"
-      - name: Check for existing NAPI audit issue (fingerprint-based)
-        id: napi_issue_check
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.issue_needed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
-          NAPI_AUDIT_FINGERPRINT_KEY: ${{ secrets.NAPI_AUDIT_FINGERPRINT_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
-            exit 1
-          fi
-          fingerprint=$(node -e "
-            const fs = require('fs');
-            const { computeFingerprint } = require('./scripts/napi-safe-merge-decision.js');
-            const audit = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/napi_audit_result.json', 'utf8'));
-            const candidateLists = {
-              newPendingGitAsync: audit.newPendingGitAsync,
-              newStreamRisk: audit.newStreamRisk,
-            };
-            process.stdout.write(computeFingerprint(candidateLists, process.env.NAPI_AUDIT_FINGERPRINT_KEY));
-          ")
-          existing=$(FINGERPRINT="$fingerprint" gh issue list --repo bash0816/Github-Copilot-Termux-Private \
-            --state open --json number,title,body --limit 1000 \
-            --jq '[.[] | select(.title | contains("要レビューの新規 NAPI エクスポートを検出")) | select(.body | contains("napi-audit-fingerprint: " + env.FINGERPRINT))] | .[0].number // empty')
-          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
-          if [ -n "$existing" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "existing_issue_number=$existing" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Create issue for unknown NAPI exports
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.issue_needed == 'true' && steps.napi_issue_check.outputs.exists != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
-          NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
-          NAPI_FINGERPRINT_FOR_BODY: ${{ steps.napi_issue_check.outputs.fingerprint }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
-            exit 1
-          fi
-          node -e '
-            const fs = require("fs");
-            const { generateIssueBody } = require("./scripts/napi-issue-body.js");
-            const audit = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/napi_audit_result.json", "utf8"));
-            const version = process.env.NEW_VERSION;
-            const fingerprint = process.env.NAPI_FINGERPRINT_FOR_BODY;
-            process.stdout.write(generateIssueBody(audit, version, fingerprint));
-          ' | gh issue create --repo bash0816/Github-Copilot-Termux-Private --title "⚠️ copilot@${NEW_VERSION}: 要レビューの新規 NAPI エクスポートを検出" --body-file -
-        id: create_napi_issue
-      - name: Comment on existing matching NAPI issue
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.napi_audit.outputs.audit_skipped != 'true' && steps.napi_audit.outputs.issue_needed == 'true' && steps.napi_issue_check.outputs.exists == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
-          NEW_VERSION: ${{ steps.check_version.outputs.new_version }}
-        run: |
-          set -euo pipefail
-          gh issue comment "${{ steps.napi_issue_check.outputs.existing_issue_number }}" \
-            --repo bash0816/Github-Copilot-Termux-Private \
-            --body "copilot@${NEW_VERSION}でも同一内容を再検出しました(自動)。"
       - name: Commit changes to branch
         if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true'
         id: commit_branch
@@ -248,7 +140,7 @@ jobs:
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
           branch="automation/copilot-watch-${NEW_VERSION}"
 
-          git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/config/manifest.json packages/copilot-termux/package.json packages/copilot-termux/lib/platform-patch.js config/napi-known-exports.json || true
+          git add packages/copilot-termux/config/copilot-termux-release-manifest.json packages/copilot-termux/config/manifest.json packages/copilot-termux/package.json || true
 
           if [ -n "${{ steps.existing_pr_check.outputs.existing_own_pr }}" ]; then
             # 既存PRを再利用する場合、今回diffが無くても(既にpush済みの内容のまま)mergeリトライへ進む
@@ -293,101 +185,16 @@ jobs:
             echo "PR created: $pr_url"
           fi
           echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-      - name: Determine safe-merge decision
-        id: safe_merge_decision
-        if: steps.commit_branch.outputs.has_changes == 'true'
-        env:
-          NAPI_AUDIT_FINGERPRINT_KEY: ${{ secrets.NAPI_AUDIT_FINGERPRINT_KEY }}
-        run: |
-          set -euo pipefail
-          node -e "
-            const fs = require('fs');
-            const { decideSafeMerge } = require('./scripts/napi-safe-merge-decision.js');
-            const updates = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/napi_audit_result.json', 'utf8'));
-            const configRaw = fs.readFileSync('config/napi-known-exports.json', 'utf8');
-            const baseline = JSON.parse(configRaw).deferred_review_baseline;
-            const result = decideSafeMerge({
-              updates,
-              tokioPatchOk: '${{ steps.napi_audit.outputs.tokio_patch_ok }}' === 'true',
-              auditSkipped: '${{ steps.napi_audit.outputs.audit_skipped }}' === 'true',
-              baseline,
-              hmacKey: process.env.NAPI_AUDIT_FINGERPRINT_KEY,
-            });
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'safe_merge=' + result.safeMerge + '\n');
-            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'safe_merge_reason=' + result.reason + '\n');
-          "
-      - name: Safe-merge or leave for review
-        id: safe_merge
-        if: steps.commit_branch.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_ADMIN_PAT }}
-        run: |
-          set -euo pipefail
-
-          post_review_comment() {
-            local pr="$1"
-            local reason="$2"
-            local marker="<!-- copilot-watch-review-reason:${reason} -->"
-            local existing
-            existing=$(gh pr view "$pr" --json comments --jq '.comments[].body' | grep -Fqx "$marker" && echo "found" || echo "")
-            if [ -z "$existing" ]; then
-              gh pr comment "$pr" --body "${marker}
-          自動マージをスキップしました(reason=${reason})。要人間レビュー: docs/operations/platform-patch-update-guide.md に従いbehavioral stub実装確認後にマージしてください。マージ後は手動でnpm-package.ymlをdispatchしてください。"
-            fi
-            echo "Manifest PR #${pr} left open for human review (reason=${reason})"
-          }
-
-          pr_number="${{ steps.pr_create.outputs.pr_number }}"
-          safe_merge="${{ steps.safe_merge_decision.outputs.safe_merge }}"
-          safe_merge_reason="${{ steps.safe_merge_decision.outputs.safe_merge_reason }}"
-
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "ERROR: RELEASE_ADMIN_PAT secret is not set" >&2
-            exit 1
-          fi
-          if ! gh api user >/dev/null 2>&1; then
-            echo "ERROR: RELEASE_ADMIN_PAT is invalid or not authenticated" >&2
-            exit 1
-          fi
-
-          if [ "$safe_merge" = "true" ]; then
-            branch="${{ steps.commit_branch.outputs.branch }}"
-            pr_head_sha=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
-            git fetch origin main "$branch" "$pr_head_sha"
-            pr_head_sha_recheck=$(gh pr view "$pr_number" --json headRefOid --jq '.headRefOid')
-            if [ "$pr_head_sha" != "$pr_head_sha_recheck" ]; then
-              echo "ERROR: PR head changed during fetch/validation window. Aborting to avoid validating a stale commit." >&2
-              exit 1
-            fi
-            if ! git merge-base --is-ancestor origin/main "$pr_head_sha_recheck"; then
-              echo "ERROR: PR head does not include latest origin/main. Refusing to admin-merge to avoid rollback." >&2
-              exit 1
-            fi
-
-            validation_json=$(PR_HEAD_SHA="$pr_head_sha_recheck" NEW_VERSION="${{ steps.check_version.outputs.new_version }}" EXPECTED_LAST_UPDATED="${{ steps.update_manifest.outputs.expected_last_updated }}" node scripts/napi-watch-merge-validate.js)
-            validated_safe_merge=$(echo "$validation_json" | node -e "process.stdout.write(String(JSON.parse(require('fs').readFileSync(0,'utf8')).safeMerge))")
-            validated_reason=$(echo "$validation_json" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).reason)")
-
-            if [ "$validated_safe_merge" = "true" ]; then
-              gh pr merge "$pr_number" --admin --squash --delete-branch --match-head-commit "$pr_head_sha_recheck"
-              echo "safe_merged=true" >> "$GITHUB_OUTPUT"
-              echo "Manifest PR #${pr_number} merged (admin bypass, reason=$validated_reason)"
-            else
-              echo "safe_merged=false" >> "$GITHUB_OUTPUT"
-              post_review_comment "$pr_number" "$validated_reason"
-            fi
-          else
-            echo "safe_merged=false" >> "$GITHUB_OUTPUT"
-            post_review_comment "$pr_number" "$safe_merge_reason"
-          fi
       - name: Dispatch npm-package verify
-        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.safe_merge.outputs.safe_merged == 'true'
+        if: steps.check_version.outputs.new_version != '' && steps.existing_pr_check.outputs.skip != 'true' && steps.pr_create.outputs.pr_number != ''
         run: |
           set -euo pipefail
           NEW_VERSION="${{ steps.check_version.outputs.new_version }}"
+          branch="${{ steps.commit_branch.outputs.branch }}"
 
           gh workflow run npm-package.yml \
             --repo bash0816/Github-Copilot-Termux \
+            --ref "$branch" \
             --field publish=false \
             --field retag_latest=false
 

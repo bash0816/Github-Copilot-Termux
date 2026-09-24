@@ -1,6 +1,6 @@
 {
   "name": "@bash0816/copilot-termux",
-  "version": "1.0.86",
+  "version": "1.0.88",
   "description": "GitHub Copilot CLI for Termux (Android aarch64)",
   "license": "GPL-3.0-only",
   "readme": "README.md",
@@ -23,12 +23,8 @@
   "scripts": {},
   "files": [
     "bin",
-    "lib/platform-patch.js",
     "lib/setup.js",
     "lib/check-updates.js",
-    "lib/bionic-compat.so",
-    "lib/native/pty.node",
-    "scripts/bionic-compat.c",
     "config",
     "LICENSE",
     "THIRD-PARTY-NOTICES.md",

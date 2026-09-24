@@ -63,14 +63,8 @@ copilot-termux setup
 
 ## How It Works / 仕組み
 
-`@bash0816/copilot-termux` は `@github/copilot` CLI の Termux 向けラッパーです。
-
-- **bionic-compat.so**: Termux bionic 上で動作しない glibc 依存シンボルをスタブ
-- **platform-patch.js**: Rust ネイティブモジュールの Android 非対応 API を Node.js で代替
-  - `networkFetch*`: MCP SSE transport 用 HTTP ストリーム実装
-  - `responsesStreamDrive`: AI レスポンスストリーム処理
-  - `modelHttp*`: AI モデル HTTP 呼び出し
-- **pty.node**: Termux bionic ネイティブビルドの PTY モジュール
+`@bash0816/copilot-termux` は `@github/copilot` CLI の Termux 向けラッパーです。glibc ローダーを
+使用して、標準的な glibc ベースの Copilot バイナリを Android 上で直接実行します。
 
 ## Known Issues / 既知の問題
 
@@ -91,4 +85,3 @@ copilot-termux setup
 
 - Wrapper code (`packages/copilot-termux/`): GPL-3.0-only
 - `@github/copilot` CLI: [GitHub Copilot CLI License](https://github.com/github/copilot-cli/blob/main/LICENSE.md)（独自ライセンス・再配布条件あり）
-- PTY module (`pty.node`): MIT

@@ -1,6 +1,5 @@
 This license (GPL-3.0-only) applies to the wrapper code in this package:
-  bin/copilot, lib/platform-patch.js, lib/bionic-compat.so,
-  and all other files not listed in THIRD-PARTY-NOTICES.md.
+  bin/copilot and all other files not listed in THIRD-PARTY-NOTICES.md.
 
 Bundled third-party software is covered by separate licenses.
 See THIRD-PARTY-NOTICES.md for details.
