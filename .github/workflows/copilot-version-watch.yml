@@ -16,10 +16,7 @@ jobs:
     permissions:
       contents: write
       actions: write
-      issues: write
       pull-requests: write
-    env:
-      WATCH_FAILURE_ISSUE_TITLE: "⚠️ Copilot version watch failed"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -201,31 +198,3 @@ jobs:
           echo "Dispatched npm-package.yml verify (publish=false, retag_latest=false) for version ${NEW_VERSION}"
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Check for existing failure issue
-        if: failure()
-        id: existing_failure_issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          existing=$(ISSUE_TITLE="$WATCH_FAILURE_ISSUE_TITLE" gh issue list --repo "${{ github.repository }}" \
-            --state open --limit 100 --json number,title \
-            --jq '[.[] | select(.title == env.ISSUE_TITLE)] | .[0].number // empty')
-          echo "existing_issue=$existing" >> "$GITHUB_OUTPUT"
-      - name: Report workflow failure
-        if: failure() && steps.existing_failure_issue.outputs.existing_issue == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh issue create --repo "${{ github.repository }}" \
-            --title "$WATCH_FAILURE_ISSUE_TITLE" \
-            --body "Workflow run failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-      - name: Comment on existing failure issue
-        if: failure() && steps.existing_failure_issue.outputs.existing_issue != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh issue comment "${{ steps.existing_failure_issue.outputs.existing_issue }}" --repo "${{ github.repository }}" \
-            --body "Recurred: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
