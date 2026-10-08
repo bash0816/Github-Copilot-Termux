@@ -9,6 +9,10 @@ on:
       release_notes:
         description: 'Release notes (optional)'
         default: ''
+      source_sha:
+        description: 'Source commit SHA (optional; empty = npm gitHead of the version)'
+        required: false
+        default: ''
 
 concurrency:
   group: copilot-releases-write
@@ -36,39 +40,64 @@ jobs:
           }
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
 
       - name: Verify release readiness
-        run: |
-          set -eu
-          pkg_version=$(node -p "require('./packages/copilot-termux/package.json').version")
-          [ "$pkg_version" = "$VER" ] || { echo "ERROR: package.json version ($pkg_version) != input VERSION ($VER)" >&2; exit 1; }
-
-          manifest_audited=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').latest_audited_version")
-          [ "$manifest_audited" = "$VER" ] || { echo "ERROR: manifest latest_audited_version ($manifest_audited) != input VERSION ($VER)" >&2; exit 1; }
-
-          manifest_state=$(node -p "require('./packages/copilot-termux/config/copilot-termux-release-manifest.json').candidate_state")
-          [ "$manifest_state" = "promoted" ] || { echo "ERROR: manifest candidate_state ($manifest_state) != 'promoted'" >&2; exit 1; }
-
-          published=$(npm view "@bash0816/copilot-termux@${VER}" version 2>/dev/null || echo "")
-          [ "$published" = "$VER" ] || { echo "ERROR: not published on npm" >&2; exit 1; }
-          actual_latest=$(npm view "@bash0816/copilot-termux" "dist-tags.latest" 2>/dev/null || echo "")
-          [ "$actual_latest" = "$VER" ] || { echo "ERROR: dist-tags.latest=$actual_latest, expected $VER" >&2; exit 1; }
-          echo "Release readiness verified: $VER"
+        id: verify
+        env:
+          PKG_NAME: '@bash0816/copilot-termux'
+          REPO: ${{ github.repository }}
+          SOURCE_SHA_INPUT: ${{ inputs.source_sha }}
+        run: bash scripts/release-finalize-check.sh
 
       - name: Create GitHub Release
+        env:
+          TAG_STATE: ${{ steps.verify.outputs.tag_state }}
+          SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
         run: |
           set -eu
           NOTES="$NOTES_INPUT"
           [ -z "$NOTES" ] && NOTES="upstream @github/copilot@${VER} 追従。"
-          if gh release view "v${VER}" >/dev/null 2>&1; then
-            echo "Release v${VER} already exists, skipping creation"
-          else
-            gh release create "v${VER}" --title "v${VER}" --notes "$NOTES" --latest
-          fi
+
+          # Release 存在判定は HTTP ステータスで行う。404 は非ゼロ終了でも「未作成」として扱い、
+          # 200 以外かつ 404 以外（通信・認証・API エラー・ステータス取得不能）は停止する。
+          resp=$(gh api -i "repos/${REPO}/releases/tags/v${VER}" 2>&1) || true
+          status=$(printf '%s\n' "$resp" | sed -n 's#^HTTP/[0-9.]* \([0-9][0-9][0-9]\).*#\1#p' | sed -n '1p')
+          case "$status" in
+            200) release_state=exists ;;
+            404) release_state=absent ;;
+            *)
+              echo "ERROR: release lookup failed (status='${status}'), stopping before any write" >&2
+              echo "$resp" >&2
+              exit 1
+              ;;
+          esac
+
+          case "${TAG_STATE}:${release_state}" in
+            match:exists)
+              echo "Release v${VER} already exists and tag matches source (${SOURCE_SHA}), skipping creation"
+              ;;
+            match:absent)
+              gh release create "v${VER}" --title "v${VER}" --notes "$NOTES" --latest
+              ;;
+            absent:absent)
+              gh release create "v${VER}" --target "$SOURCE_SHA" --title "v${VER}" --notes "$NOTES" --latest
+              ;;
+            absent:exists)
+              echo "ERROR: release v${VER} exists but tag v${VER} does not (unexpected, check manually)" >&2
+              exit 1
+              ;;
+            *)
+              echo "ERROR: unexpected state tag_state=${TAG_STATE} release=${release_state}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Update RELEASES.md on feature branch then open PR
         run: |
