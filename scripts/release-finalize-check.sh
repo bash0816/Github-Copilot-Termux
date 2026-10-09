@@ -109,8 +109,10 @@ while IFS=$'\t' read -r sha ref; do
 done <<< "$ls_out"
 
 tag_commit=""
-if [ -z "$tag_direct" ] && [ -z "$tag_peeled" ]; then
+if [ -z "$ls_out" ]; then
   tag_state="absent"
+elif [ -z "$tag_direct" ] && [ -z "$tag_peeled" ]; then
+  fail "unexpected git ls-remote output for v${VER}: ${ls_out}"
 else
   if [ -n "$tag_peeled" ]; then
     tag_commit="$tag_peeled"
@@ -134,12 +136,12 @@ emit() {
     printf '%s=%s\n' "$1" "$2"
   fi
 }
-emit source_sha "$source_sha"
-emit state_sha "$state_sha"
-emit tag_state "$tag_state"
-
 if [ "$tag_state" = "mismatch" ]; then
   fail "tag v${VER} points to ${tag_commit}, not source ${source_sha}; not moving it"
 fi
+
+emit source_sha "$source_sha"
+emit state_sha "$state_sha"
+emit tag_state "$tag_state"
 
 echo "Release readiness verified: ${VER} (source=${source_sha}, tag_state=${tag_state})"

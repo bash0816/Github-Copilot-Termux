@@ -60,6 +60,7 @@ jobs:
         env:
           TAG_STATE: ${{ steps.verify.outputs.tag_state }}
           SOURCE_SHA: ${{ steps.verify.outputs.source_sha }}
+          REPO: ${{ github.repository }}
         run: |
           set -eu
           NOTES="$NOTES_INPUT"
@@ -67,10 +68,21 @@ jobs:
 
           # Release 存在判定は HTTP ステータスで行う。404 は非ゼロ終了でも「未作成」として扱い、
           # 200 以外かつ 404 以外（通信・認証・API エラー・ステータス取得不能）は停止する。
-          resp=$(gh api -i "repos/${REPO}/releases/tags/v${VER}" 2>&1) || true
+          if resp=$(gh api -i "repos/${REPO}/releases/tags/v${VER}" 2>&1); then
+            api_rc=0
+          else
+            api_rc=$?
+          fi
           status=$(printf '%s\n' "$resp" | sed -n 's#^HTTP/[0-9.]* \([0-9][0-9][0-9]\).*#\1#p' | sed -n '1p')
           case "$status" in
-            200) release_state=exists ;;
+            200)
+              if [ "$api_rc" -ne 0 ]; then
+                echo "ERROR: release lookup returned 200 but gh exited ${api_rc}, stopping before any write" >&2
+                echo "$resp" >&2
+                exit 1
+              fi
+              release_state=exists
+              ;;
             404) release_state=absent ;;
             *)
               echo "ERROR: release lookup failed (status='${status}'), stopping before any write" >&2
