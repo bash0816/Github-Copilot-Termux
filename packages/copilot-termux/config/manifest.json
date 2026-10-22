@@ -2,7 +2,7 @@
   "wrapperVersion": "2.0.0",
   "copilot": {
     "package": "@github/copilot-linux-arm64",
-    "version": "1.0.102",
-    "integrity": "sha512-5rO0B2/AduCekrE+aUzipySKZxZY2b/tVRZ8Suy8ymPFNC0Q7HQiQ8DZhxj+3RhHR8rU2Z8KOJVAbtMlROX6+A=="
+    "version": "1.0.103",
+    "integrity": "sha512-QK+rSoLxGD79qWpPGZBhV/9KB/yAOnfTkWsAAcRBdFRO3loSFO/bkKDb88aVrSMY/gue167gTOSpR2BWdFObjg=="
   }
 }
