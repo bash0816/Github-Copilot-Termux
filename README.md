@@ -6,11 +6,11 @@ Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
 ## Status / 状態
 
-- **@latest**: `1.0.82`（recommended / 推奨）
+- Latest published versions: see the npm dist-tags (`npm view @bash0816/copilot-termux dist-tags`) / 公開中の最新版は npm の dist-tag を参照してください(`npm view @bash0816/copilot-termux dist-tags`)
 - package: `@bash0816/copilot-termux`
-- `copilot -p`: **available** ✅（1.0.82、glibc mode）
-- TUI (`copilot`): **available** ✅（1.0.82、glibc mode）
-- MCP: **available** ✅（1.0.82、glibc mode）
+- `copilot -p`: **available** ✅
+- TUI (`copilot`): **available** ✅
+- MCP: **available** ✅
 
 既知の問題は [Known Issues](#known-issues--既知の問題) 参照。
 

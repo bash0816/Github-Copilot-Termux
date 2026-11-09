@@ -6,10 +6,10 @@ Termux (Android aarch64) 向け GitHub Copilot CLI パッケージです。
 
 ## Status / 状態
 
-- **@latest**: `1.0.82`（recommended / 推奨。1.0.65 の TUI login regression・`/update`参照先・起動時通知バナーの問題を修正済み）
-- `copilot -p`: **available** ✅（1.0.82）
-- TUI (`copilot`): **available** ✅（1.0.82）
-- MCP: **available** ✅（1.0.82）
+- Latest published versions: see the npm dist-tags (`npm view @bash0816/copilot-termux dist-tags`) / 公開中の最新版は npm の dist-tag を参照してください(`npm view @bash0816/copilot-termux dist-tags`)
+- `copilot -p`: **available** ✅
+- TUI (`copilot`): **available** ✅
+- MCP: **available** ✅
 
 ## Install / インストール
 
@@ -47,10 +47,17 @@ copilot
 
 ## Update / 更新
 
+- Run `copilot update`. It installs the newest audited package and then runs `copilot-termux setup` for you. / `copilot update` を実行します。監査済みの最新パッケージを入れ、続けて `copilot-termux setup` を自動で実行します。
+- If you installed with `npm install -g` yourself, run `copilot-termux setup` afterwards. The same applies when `copilot` prints "copilot <version> is not set up". / `npm install -g` で直接入れた場合は、その後 `copilot-termux setup` を実行してください。「copilot <version> is not set up」と表示された場合も同じです。
+
 ```sh
 npm install -g @bash0816/copilot-termux@latest --force
 copilot-termux setup
 ```
+
+- This package runs the copilot version listed in its manifest and turns off the upstream CLI's own auto-update (`COPILOT_AUTO_UPDATE=false`). The version you run is the version that was tested. / このパッケージは manifest に書かれた版の copilot を実行し、上流 CLI の自己更新を無効にしています(`COPILOT_AUTO_UPDATE=false`)。実行される版は検証済みの版です。
+- `node` is required to start `copilot` (the launcher reads the manifest with it). / `copilot` の起動に `node` が必要です(起動時に manifest を読み取るため)。
+- Do not run `copilot-termux setup` several times at the same time. If a setup was interrupted, or `copilot` fails to start after it, fix the cause (network, glibc) and run `copilot-termux setup` again. If that does not help, delete `~/.copilot-termux/<version>` and run it once more. / `copilot-termux setup` を同時に複数実行しないでください。setup が中断した場合や、setup の後に `copilot` が起動しない場合は、原因(ネットワーク、glibc など)を直して `copilot-termux setup` を再実行してください。それでも直らないときは `~/.copilot-termux/<version>` を削除してもう一度実行してください。
 
 ## Requirements / 必要環境
 
