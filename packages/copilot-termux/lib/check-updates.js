@@ -107,9 +107,11 @@ async function resolveTarget() {
 
 function installVersion(targetVer) {
   const spec = `${packageName}@${targetVer}`;
+  const setupBin = path.join(npmPrefix, 'bin', 'copilot-termux');
   const dryRun = process.argv.includes('--dry-run');
   if (dryRun) {
     console.log(`npm install -g --prefix ${npmPrefix} ${spec}`);
+    console.log(`${setupBin} setup`);
     return 0;
   }
   console.error(`Updating to ${targetVer}...`);
@@ -118,9 +120,18 @@ function installVersion(targetVer) {
     env: { ...process.env, DISABLE_INSTALLATION_CHECKS: 'true' },
   });
   if (result.status !== 0) {
-    console.error(`\nUpdate failed. Run manually:\n  DISABLE_INSTALLATION_CHECKS=true npm install -g --prefix ${npmPrefix} ${spec}`);
+    console.error(`\nUpdate failed. Run manually:\n  DISABLE_INSTALLATION_CHECKS=true npm install -g --prefix ${npmPrefix} ${spec}\nAfter installing, run: copilot-termux setup`);
+    return result.status === null ? 1 : result.status;
   }
-  return result.status === null ? 1 : result.status;
+  // npm 成功後のみ、パッケージに固定されたバイナリのセットアップを実行する（shell は介さない）
+  const setupResult = cp.spawnSync(setupBin, ['setup'], { stdio: 'inherit' });
+  if (setupResult.error || setupResult.signal || setupResult.status !== 0) {
+    console.error(`\nThe package was updated to ${targetVer}, but updating the copilot binary failed.\nRun: copilot-termux setup`);
+    if (setupResult.error) console.error(setupResult.error.message);
+    return typeof setupResult.status === 'number' && setupResult.status !== 0 ? setupResult.status : 1;
+  }
+  console.error(`Updated to ${targetVer}.`);
+  return 0;
 }
 
 async function runUpdate() {
@@ -130,6 +141,7 @@ async function runUpdate() {
   } catch (e) {
     console.error(`Failed to check for updates: ${e.message}`);
     console.error(`Run manually: DISABLE_INSTALLATION_CHECKS=true npm install -g --prefix ${npmPrefix} ${packageName}@latest`);
+    console.error('After installing, run: copilot-termux setup');
     return 1;
   }
   if (!targetVer) {
@@ -161,7 +173,7 @@ async function runNotify() {
 module.exports = { runUpdate, runNotify };
 
 // テスト専用export・CLI実行経路には影響しない（node:test用）
-module.exports.__test = { compareVersions };
+module.exports.__test = { compareVersions, installVersion };
 
 // CLI entry
 if (require.main === module) {
