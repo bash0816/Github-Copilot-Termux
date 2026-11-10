@@ -154,7 +154,8 @@ node packages/copilot-termux/lib/check-updates.js update
 **期待動作**:
 - `Updating to <新バージョン>...` メッセージが stderr に表示される
 - `npm install -g --prefix <prefix> @bash0816/copilot-termux@<新バージョン>` が実行される
-- インストール成功時は exit 0
+- インストール成功後、`<prefix>/bin/copilot-termux setup` が続けて実行され、成功時は `Updated to <新バージョン>.` が stderr に表示されて exit 0
+- setup が失敗(非0・起動不能・signal)した場合は『The package was updated to <ver>, but updating the copilot binary failed.』と `Run: copilot-termux setup` が stderr に表示され、非0で終了(npm が失敗した場合は setup を実行せず、手動コマンドと `After installing, run: copilot-termux setup` を表示)
 - インストール失敗時は手動実行コマンドが stderr に表示されて exit 1
 
 **確認ポイント**:
@@ -277,12 +278,32 @@ node packages/copilot-termux/lib/check-updates.js update --dry-run
 **期待動作**:
 - 正確な `npm install -g --prefix <prefix> @bash0816/copilot-termux@<version>` コマンド文字列が stdout に出力される
 - npm install は実際には実行されない（stdio='inherit' されない）
+- stdout に `<prefix>/bin/copilot-termux setup` の行も出力される(実行はされない)
 - exit 0
 
 **確認ポイント**:
 - prefix が正しく動的導出されていること（`path.resolve(__dirname, '../../../../..')`で 5 段上）
 - インストール対象パッケージ名が `@bash0816/copilot-termux` であること
 - version が registry から取得した target version であること
+
+---
+
+#### TC-L1: ランチャーは manifest の版のディレクトリを実行する
+
+前提: `~/.copilot-termux/<manifest の copilot.version>/copilot` が存在する(`copilot-termux setup` 済み)。`~/.copilot-termux/current` が別の版を指していても影響しない。
+
+**期待動作**:
+- `copilot --version` が manifest の版のバイナリで動く
+- 起動した本体の環境に `COPILOT_AUTO_UPDATE=false` が設定されている(呼び出し元が `true` を渡しても `false` になる)
+
+#### TC-L2: 版ディレクトリが無い / manifest が不正なときは案内して停止する
+
+**期待動作**:
+- 版ディレクトリ(または `copilot` ファイル)が無い: `copilot <version> is not set up. Run: copilot-termux setup` を stderr に出して exit 1(別の版のバイナリは実行しない)
+- manifest が壊れている/`copilot.version` が不正な形式: `Broken package (manifest unreadable or invalid). Reinstall: npm install -g @bash0816/copilot-termux` を stderr に出して exit 1
+- `node` が PATH に無い: `node not found in PATH` を stderr に出して exit 1
+
+自動テスト: `node --test scripts/copilot-wrapper.test.js`(上記を隔離環境で検証)。`copilot update` の結合テスト: `COPILOT_TERMUX_INTEGRATION=1 node --test scripts/copilot-update-integration.test.js`(実 registry に接続。偽の npm を使用)。
 
 ---
 

@@ -14,17 +14,23 @@ if [ "${1:-}" = "update" ]; then
 fi
 
 CACHE_DIR="${HOME}/.copilot-termux"
-CURRENT="${CACHE_DIR}/current"
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 
-if [ ! -d "${CURRENT}" ]; then
-  echo "[copilot-termux] Not set up. Run: copilot-termux setup" >&2
+if ! command -v node >/dev/null 2>&1; then
+  echo "[copilot-termux] ERROR: node not found in PATH. Install it: pkg install nodejs" >&2
   exit 1
 fi
 
-COPILOT_BIN="${CURRENT}/copilot"
+MANIFEST="${PACKAGE_DIR}/config/manifest.json"
+VER=$(node -e 'try{const v=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).copilot.version;if(typeof v==="string"&&/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$/.test(v))process.stdout.write(v);else process.exit(2)}catch(e){process.exit(2)}' "${MANIFEST}") || VER=""
+if [ -z "${VER}" ]; then
+  echo "[copilot-termux] Broken package (manifest unreadable or invalid). Reinstall: npm install -g @bash0816/copilot-termux" >&2
+  exit 1
+fi
+
+COPILOT_BIN="${CACHE_DIR}/${VER}/copilot"
 if [ ! -f "${COPILOT_BIN}" ]; then
-  echo "[copilot-termux] Installation broken. Run: copilot-termux setup" >&2
+  echo "[copilot-termux] copilot ${VER} is not set up. Run: copilot-termux setup" >&2
   exit 1
 fi
 
@@ -48,6 +54,7 @@ exec env -u LD_PRELOAD \
   SSL_CERT_FILE="${_SSL_CERT}" \
   SSL_CERT_DIR="${_SSL_CERT_DIR}" \
   COPILOT_TERMUX_GLIBC_MODE=1 \
+  COPILOT_AUTO_UPDATE=false \
   "${_GLIBC_LD}" --library-path "${_GLIBC_LIBS}" \
   "${COPILOT_BIN}" \
   "$@"
